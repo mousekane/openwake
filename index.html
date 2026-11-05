@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenWake</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0}
+.wrap{max-width:860px;margin:0 auto;padding:20px 16px 60px}h1{font-size:24px;margin:4px 0 2px}.sub{color:#94a3b8;font-size:13px;margin-bottom:18px}
+.card{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:16px;margin-bottom:14px}
+.card h2{font-size:16px;margin:0 0 10px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block}.on{background:#22c55e;box-shadow:0 0 8px #22c55e}.off{background:#ef4444;box-shadow:0 0 8px #ef4444}
+button{border:0;border-radius:10px;padding:10px 16px;font-size:14px;cursor:pointer;background:#3b82f6;color:#fff}button.warn{background:#ef4444}button.ghost{background:#334155}button:disabled{opacity:.5}
+input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:#e2e8f0;margin:4px 0 10px}label{font-size:13px;color:#94a3b8}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}@media(max-width:600px){.grid{grid-template-columns:1fr}}
+.mono{font-family:ui-monospace,monospace;word-break:break-all}.muted{color:#94a3b8;font-size:13px}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#e2e8f0;color:#0f172a;padding:10px 18px;border-radius:20px;display:none;z-index:9}
+a{color:#60a5fa}
+</style></head><body><div class="wrap">
+<h1>OpenWake</h1><div class="sub">DDNS · Wake-on-LAN · SSH 开关机 · 端口 5155 · 访问地址以 DDNS 域名为准</div>
+
+<div id="authCard" class="card" style="display:none">
+  <h2 id="authTitle">登录</h2>
+  <label>管理密码</label><input id="authPw" type="password" placeholder="首次使用请先设置管理密码">
+  <div class="row"><button id="authBtn">确定</button></div>
+  <p class="muted">密码只存在容器 /data/config.json 里（bcrypt 加密）。公网访问务必用 HTTPS，见下方配置说明。</p>
+</div>
+
+<div id="main" style="display:none">
+  <div class="card"><h2>状态总览 <button class="ghost" onclick="loadStatus()">刷新</button> <button class="ghost" onclick="logout()">退出</button></h2>
+    <div id="ddnsBox" class="muted"></div>
+    <div id="accessBox" style="margin-top:8px"></div>
+  </div>
+
+  <div id="pcBox"></div>
+
+  <div class="card"><h2>OpenWrt 宿主机</h2>
+    <div id="owBox" class="muted"></div>
+    <div class="row" style="margin-top:10px"><button class="warn" onclick="actOw()">一键关机 OpenWrt</button></div>
+    <p class="muted">通过 SSH 到宿主机执行 poweroff。宿主机地址留空时自动取容器默认网关（host 网络模式下即 OpenWrt 本身）。执行前会二次确认，关机后需手动按电源键恢复。</p>
+  </div>
+
+  <div class="card"><h2>配置 <button class="ghost" onclick="toggleCfg()">展开 / 收起</button></h2>
+  <div id="cfgBox" style="display:none">
+    <h3 style="font-size:14px">DDNS（仅 Cloudflare API Token）</h3>
+    <label><input type="checkbox" id="ddnsEn" style="width:auto"> 启用 DDNS</label>
+    <div class="grid"><div><label>域名（已托管在 Cloudflare 的完整域名）</label><input id="ddnsDomain" placeholder="wake.example.com"></div>
+    <div><label>API Token（留空 = 不改）</label><input id="ddnsToken" type="password" placeholder="已设置时留空不改"></div></div>
+    <label><input type="checkbox" id="ddnsV4" style="width:auto"> 更新 IPv4（A 记录）</label>
+    <label><input type="checkbox" id="ddnsV6" style="width:auto"> 更新 IPv6（AAAA 记录）</label>
+    <div><label>更新间隔（秒，≥60）</label><input id="ddnsInt" type="number" value="300"></div>
+    <p class="muted">Token 权限：Zone → DNS → Edit，限定到该域名所在 Zone。记录强制 proxied=false（DNS only），否则 5155 走 Cloudflare 代理不通。</p>
+
+    <h3 style="font-size:14px">Win PC（可多台，点“添加 PC”新增）</h3><div id="pcCfg"></div>
+    <button class="ghost" onclick="addPcCfg()">+ 添加 PC</button>
+    <p class="muted">PC 端前置：设置 → 应用 → 可选功能 → 添加 OpenSSH 服务器，服务自动启动，防火墙放行 22 端口；用管理员账号。开机需 BIOS/网卡开启 Wake-on-LAN，且关机是真关机（关闭 Windows 快速启动，否则 WOL 常失效）。</p>
+
+    <h3 style="font-size:14px">OpenWrt SSH</h3>
+    <div class="grid"><div><label>宿主机 IP（留空 = 默认网关）</label><input id="owHost" placeholder="192.168.1.1"></div>
+    <div><label>用户名</label><input id="owUser" value="root"></div>
+    <div><label>密码（留空 = 不改）</label><input id="owPw" type="password"></div>
+    <div><label>端口</label><input id="owPort" type="number" value="22"></div></div>
+    <label>私钥（可选，留空 = 不改；有私钥时优先用私钥）</label><input id="owKey" type="password" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----">
+
+    <h3 style="font-size:14px">服务与安全</h3>
+    <div class="grid"><div><label>端口</label><input id="port" type="number" value="5155"></div>
+    <div><label>协议</label><select id="tlsMode"><option value="http">http</option><option value="https">https（无证书时自动生成自签名）</option></select></div>
+    <div><label>新管理密码（留空 = 不改）</label><input id="adminPw" type="password"></div></div>
+    <p class="muted">改端口 / 协议需重启容器生效。外网访问建议：路由器只转发 5155 到 OpenWrt，管理页密码 + HTTPS，不要用桥接网络（WOL 发不出去）。</p>
+    <div class="row"><button onclick="saveCfg()">保存配置</button><button class="ghost" onclick="ddnsRefresh()">立即刷新 DDNS</button></div>
+  </div></div>
+</div>
+</div><div id="toast" class="toast"></div>
+<script>
+let cfg=null;
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',4000)}
+async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j}
+async function init(){
+  const me=await api('/api/me');
+  const auth=document.getElementById('authCard'),main=document.getElementById('main');
+  if(me.needs_setup){document.getElementById('authTitle').textContent='首次设置管理密码';auth.style.display='block';
+    document.getElementById('authBtn').onclick=async()=>{const pw=document.getElementById('authPw').value;try{await api('/api/setup','POST',{password:pw});location.reload()}catch(e){toast(e.message)}};
+  }else if(!me.authed){auth.style.display='block';
+    document.getElementById('authBtn').onclick=async()=>{const pw=document.getElementById('authPw').value;try{await api('/api/login','POST',{password:pw});location.reload()}catch(e){toast(e.message)}};
+  }else{main.style.display='block';await loadAll();setInterval(loadStatus,15000)}
+}
+async function loadAll(){await loadStatus();await loadCfg()}
+async function loadStatus(){
+  try{const s=await api('/api/status');
+    document.getElementById('ddnsBox').innerHTML='DDNS：'+(s.ddns.enabled?'已启用':'未启用')+' · 域名 '+(s.ddns.domain||'未填')+'<br>IPv4 '+(s.ddns.ipv4||'-')+' · IPv6 '+(s.ddns.ipv6||'-')+'<br>上次更新 '+(s.ddns.last_update||'-')+(s.ddns.last_error?('<br><span style="color:#f87171">错误：'+s.ddns.last_error+'</span>'):'');
+    document.getElementById('accessBox').innerHTML=s.access_url?('外网访问：<a class="mono" href="'+s.access_url+'" target="_blank">'+s.access_url+'</a>'):'<span class="muted">填好 DDNS 域名并在路由器转发 5155 后，这里会显示外网访问地址。</span>';
+    document.getElementById('owBox').innerHTML='<span class="dot '+(s.openwrt.online?'on':'off')+'"></span> '+s.openwrt.host+' '+(s.openwrt.online?'在线':'离线')+'（'+(s.openwrt.method||'')+'，'+(s.openwrt.checked_at||'')+'）';
+    document.getElementById('pcBox').innerHTML=s.pcs.map(p=>`<div class="card"><h2>${p.name||p.id}</h2>
+      <div><span class="dot ${p.online?'on':'off'}"></span> ${p.online?'已开机':'已关机'} · ${p.ip} · ${p.mac} <span class="muted">（${p.method||''}${p.last_seen?'，上次在线 '+p.last_seen:''}）</span></div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="pcAct('${p.id}','wake',this)">一键开机</button>
+        <button class="warn" onclick="pcAct('${p.id}','shutdown',this,true)">一键关机</button>
+        <button class="warn" onclick="pcAct('${p.id}','restart',this,true)">一键重启</button>
+      </div></div>`).join('')||'<div class="card muted">暂无 PC，请在配置里添加。</div>';
+  }catch(e){if(e.message==='未登录')location.reload()}
+}
+async function pcAct(id,act,btn,confirmIt){
+  if(confirmIt&&!confirm(act==='shutdown'?'确定关机这台 PC 吗？':'确定重启这台 PC 吗？'))return;
+  btn.disabled=true;try{const r=await api('/api/pc/'+id+'/'+act,'POST',{});toast(r.message);setTimeout(loadStatus,3000)}catch(e){toast(e.message)}btn.disabled=false;
+}
+async function actOw(){if(!confirm('确定关机 OpenWrt 吗？关机后路由器断网，需手动按电源键才能恢复。'))return;try{const r=await api('/api/openwrt/poweroff','POST',{});toast(r.message)}catch(e){toast(e.message)}}
+function toggleCfg(){const b=document.getElementById('cfgBox');b.style.display=b.style.display==='none'?'block':'none'}
+async function logout(){await api('/api/logout','POST',{});location.reload()}
+async function ddnsRefresh(){try{const r=await api('/api/ddns/refresh','POST',{});toast(r.message)}catch(e){toast(e.message)}}
+function pcCfgHtml(p,i){return `<div class="card" style="background:#0f172a" data-pc="${i}">
+  <div class="grid"><div><label>名称</label><input class="pc-name" value="${p.name||''}"></div>
+  <div><label>IP</label><input class="pc-ip" value="${p.ip||''}"></div>
+  <div><label>MAC</label><input class="pc-mac" value="${p.mac||''}" placeholder="AA:BB:CC:DD:EE:FF"></div>
+  <div><label>广播 IP（留空自动）</label><input class="pc-bc" value="${p.broadcast_ip||''}" placeholder="192.168.1.255"></div>
+  <div><label>SSH 用户名</label><input class="pc-user" value="${p.ssh_user||''}"></div>
+  <div><label>SSH 端口</label><input class="pc-port" type="number" value="${p.ssh_port||22}"></div>
+  <div><label>SSH 密码（留空 = 不改）</label><input class="pc-pw" type="password"></div>
+  <div><label>SSH 私钥（留空 = 不改）</label><input class="pc-key" type="password"></div></div>
+  <button class="ghost" onclick="this.closest('[data-pc]').remove()">删除这台</button></div>`}
+function addPcCfg(){document.getElementById('pcCfg').insertAdjacentHTML('beforeend',pcCfgHtml({ssh_port:22},Date.now()))}
+async function loadCfg(){cfg=await api('/api/config');
+  document.getElementById('ddnsEn').checked=cfg.ddns.enabled;document.getElementById('ddnsDomain').value=cfg.ddns.domain||'';
+  document.getElementById('ddnsV4').checked=cfg.ddns.enable_v4;document.getElementById('ddnsV6').checked=cfg.ddns.enable_v6;
+  document.getElementById('ddnsInt').value=cfg.ddns.interval_sec||300;
+  document.getElementById('owHost').value=cfg.openwrt.host||'';document.getElementById('owUser').value=cfg.openwrt.user||'';document.getElementById('owPort').value=cfg.openwrt.port||22;
+  document.getElementById('port').value=cfg.port||5155;document.getElementById('tlsMode').value=cfg.tls_mode||'http';
+  document.getElementById('pcCfg').innerHTML=(cfg.pcs||[]).map(pcCfgHtml).join('');
+}
+async function saveCfg(){
+  const pcs=[...document.querySelectorAll('[data-pc]')].map((el,i)=>({id:'pc'+(i+1),name:el.querySelector('.pc-name').value,ip:el.querySelector('.pc-ip').value,mac:el.querySelector('.pc-mac').value,broadcast_ip:el.querySelector('.pc-bc').value,ssh_user:el.querySelector('.pc-user').value,ssh_port:parseInt(el.querySelector('.pc-port').value||'22'),ssh_password:el.querySelector('.pc-pw').value,password_change:!!el.querySelector('.pc-pw').value,ssh_key:el.querySelector('.pc-key').value,key_change:!!el.querySelector('.pc-key').value}));
+  const body={port:parseInt(document.getElementById('port').value||'5155'),tls_mode:document.getElementById('tlsMode').value,
+    ddns:{enabled:document.getElementById('ddnsEn').checked,domain:document.getElementById('ddnsDomain').value,token:document.getElementById('ddnsToken').value,token_change:!!document.getElementById('ddnsToken').value,enable_v4:document.getElementById('ddnsV4').checked,enable_v6:document.getElementById('ddnsV6').checked,interval_sec:parseInt(document.getElementById('ddnsInt').value||'300')},
+    pcs,openwrt:{host:document.getElementById('owHost').value,user:document.getElementById('owUser').value,password:document.getElementById('owPw').value,password_change:!!document.getElementById('owPw').value,key:document.getElementById('owKey').value,key_change:!!document.getElementById('owKey').value,port:parseInt(document.getElementById('owPort').value||'22')},
+    admin_password:document.getElementById('adminPw').value};
+  try{const r=await api('/api/config','POST',body);toast(r.message)}catch(e){toast(e.message)}
+}
+init();
+</script></body></html>
