@@ -1,0 +1,18 @@
+# OpenWake 一键部署（OpenWrt Docker / 任意 Linux Docker）
+# 关键：必须用 network_mode: host。
+# 原因：WOL 魔术包是局域网广播，桥接网络发不出去；host 模式下容器与宿主机同网段，
+# ping/ARP/广播/网关探测才都正常。host 模式下 ports 段无效，服务直接占宿主机 5155。
+services:
+  openwake:
+    image: ghcr.io/mousekane/openwake:latest
+    container_name: openwake
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    environment:
+      # 可选：首次启动的初始值，页面保存后以页面配置为准
+      # - CF_TOKEN=your-cloudflare-api-token
+      # - CF_DOMAIN=wake.example.com
+      # - OW_ADMIN_PASSWORD=首次管理密码（设了就不要再留在 compose 里）
+      - TZ=Asia/Shanghai

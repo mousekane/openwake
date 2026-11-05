@@ -1,0 +1,6 @@
+data/
+.git/
+.github/
+*.md
+install.sh
+openwake
