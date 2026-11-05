@@ -44,7 +44,7 @@ var appleTouchIcon []byte
 //go:embed web/manifest.webmanifest
 var manifestJSON []byte
 
-const appVersion = "1.2.0"
+const appVersion = "1.2.1"
 
 func hashPassword(pw string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
