@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>OpenWake</title>
+<meta name="description" content="OpenWake 外网操作页">
+<meta name="theme-color" content="#16a34a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="OpenWake">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:#111827;background:#e8f5e9;background-image:radial-gradient(480px 480px at 15% -5%,rgba(34,197,94,.45),transparent 60%),radial-gradient(520px 520px at 95% 20%,rgba(59,130,246,.28),transparent 60%),radial-gradient(420px 420px at 50% 110%,rgba(34,197,94,.25),transparent 60%);background-attachment:fixed;min-height:100dvh}
+.wrap{max-width:520px;margin:0 auto;padding:calc(20px + env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom))}
+header{display:flex;align-items:center;gap:12px;margin:6px 4px 18px}
+header img{width:48px;height:48px;border-radius:13px;box-shadow:0 6px 18px rgba(21,128,61,.35)}
+header h1{font-size:26px;margin:0;letter-spacing:.2px}
+header p{margin:2px 0 0;color:#4b5563;font-size:13px}
+.glass{background:rgba(255,255,255,.62);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border:1px solid rgba(255,255,255,.75);box-shadow:0 10px 30px rgba(17,24,39,.10);border-radius:24px}
+.card{padding:18px;margin-bottom:16px}
+.status{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:600}
+.dot{width:14px;height:14px;border-radius:50%;flex:none}
+.on{background:#22c55e;box-shadow:0 0 10px #22c55e}
+.off{background:#ef4444;box-shadow:0 0 10px #ef4444}
+.muted{color:#6b7280;font-size:13px;margin-top:6px}
+.btn{display:block;width:100%;min-height:56px;border:0;border-radius:16px;font-size:17px;font-weight:600;cursor:pointer;margin-top:12px;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.98)}
+.wake{background:#16a34a;color:#fff;box-shadow:0 8px 20px rgba(22,163,74,.35)}
+.restart{background:rgba(255,255,255,.85);color:#111827;border:1px solid rgba(17,24,39,.10)}
+.shutdown{background:#ef4444;color:#fff;box-shadow:0 8px 20px rgba(239,68,68,.30)}
+.op{background:#111827;color:#fff}
+.btn:disabled{opacity:.42;box-shadow:none}
+.section-title{font-size:15px;font-weight:700;color:#374151;margin:2px 4px 12px}
+.overlay{position:fixed;inset:0;background:rgba(17,24,39,.35);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;padding:24px;z-index:20}
+.overlay.show{display:flex}
+.modal{width:100%;max-width:340px;padding:26px 22px;text-align:center}
+.modal h2{font-size:22px;margin:6px 0 20px}
+.modal .row{display:flex;gap:12px}
+.modal .btn{margin-top:0}
+.cancel{background:rgba(17,24,39,.08);color:#111827}
+.confirm-green{background:#16a34a;color:#fff}
+.confirm-red{background:#ef4444;color:#fff}
+.toast{position:fixed;left:50%;bottom:calc(28px + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(17,24,39,.92);color:#fff;padding:12px 20px;border-radius:999px;display:none;z-index:30;font-size:15px;max-width:92vw;text-align:center}
+@media(min-width:700px){.wrap{max-width:560px}}
+@media(prefers-color-scheme:dark){
+body{color:#f3f4f6;background:#0f172a;background-image:radial-gradient(480px 480px at 15% -5%,rgba(34,197,94,.30),transparent 60%),radial-gradient(520px 520px at 95% 20%,rgba(59,130,246,.22),transparent 60%)}
+.glass{background:rgba(30,41,59,.62);border-color:rgba(255,255,255,.18)}
+header p,.muted,.section-title{color:#9ca3af}
+.restart{background:rgba(255,255,255,.12);color:#f3f4f6;border-color:rgba(255,255,255,.15)}
+.cancel{background:rgba(255,255,255,.14);color:#f3f4f6}
+}
+</style></head><body><div class="wrap">
+<header><img src="/icon-192.png" alt="OpenWake"><div><h1>OpenWake</h1><p>外网操作</p></div></header>
+<div id="pcBox"></div>
+<div class="glass card">
+<div class="status"><span id="owDot" class="dot off"></span><span>OpenWrt</span></div>
+<div class="muted" id="owText">—</div>
+<button id="opBtn" class="btn op" onclick="ask('openwrt','','poweroff',this)">OP关机</button>
+</div>
+</div>
+<div id="overlay" class="overlay"><div class="glass modal"><h2>请确认</h2><div class="row"><button class="btn cancel" onclick="closeModal()">取消</button><button id="confirmBtn" class="btn confirm-green" onclick="doAct()">确认</button></div></div></div>
+<div id="toast" class="toast"></div>
+<script>
+let pending=null;
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',4000)}
+async function api(p,m){const r=await fetch(p,{method:m||'GET'});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j}
+async function load(){
+  try{const s=await api('/api/public/status');
+    document.getElementById('owDot').className='dot '+(s.openwrt.online?'on':'off');
+    document.getElementById('owText').textContent=s.openwrt.online?'在线':'离线';
+    document.getElementById('opBtn').disabled=!s.openwrt.online;
+    document.getElementById('pcBox').innerHTML=(s.pcs||[]).map(p=>`
+      <div class="glass card"><div class="status"><span class="dot ${p.online?'on':'off'}"></span><span>${p.name||p.id}</span><span style="margin-left:auto;font-size:16px;color:${p.online?'#15803d':'#dc2626'}">${p.online?'已开机':'已关机'}</span></div>
+      <button class="btn wake" ${p.online?'disabled':''} onclick="ask('pc','${p.id}','wake',this)">一键开机</button>
+      <button class="btn restart" ${p.online?'':'disabled'} onclick="ask('pc','${p.id}','restart',this)">一键重启</button>
+      <button class="btn shutdown" ${p.online?'':'disabled'} onclick="ask('pc','${p.id}','shutdown',this)">一键关机</button></div>`).join('')||'<div class="glass card muted">暂无 PC</div>';
+  }catch(e){toast(e.message)}
+}
+function ask(kind,id,act,btn){
+  if(kind==='openwrt'){pending={url:'/api/public/openwrt/poweroff',red:true}}
+  else{pending={url:'/api/public/pc/'+id+'/'+act,red:(act!=='wake')}}
+  document.getElementById('confirmBtn').className='btn '+(pending.red?'confirm-red':'confirm-green');
+  document.getElementById('overlay').classList.add('show');
+}
+function closeModal(){pending=null;document.getElementById('overlay').classList.remove('show')}
+async function doAct(){
+  if(!pending)return;const u=pending.url;closeModal();
+  try{const r=await api(u,'POST');toast(r.message);setTimeout(load,3000)}catch(e){toast(e.message)}
+}
+document.getElementById('overlay').addEventListener('click',e=>{if(e.target.id==='overlay')closeModal()});
+load();setInterval(load,15000);
+</script></body></html>

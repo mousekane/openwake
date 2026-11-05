@@ -13,6 +13,7 @@ input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #475
 .mono{font-family:ui-monospace,monospace;word-break:break-all}.muted{color:#94a3b8;font-size:13px}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#e2e8f0;color:#0f172a;padding:10px 18px;border-radius:20px;display:none;z-index:9}
 a{color:#60a5fa}
 </style></head><body><div class="wrap">
+<div style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px">💡 外网访问请转发端口 <b>5055</b>，不要转发 5155；内网访问请直接访问 <b>5155</b>。外网操作页（5055）无密码、无设置，仅状态和开关机操作。</div>
 <h1>OpenWake</h1><div class="sub">DDNS · Wake-on-LAN · SSH 开关机 · 端口 5155 · 访问地址以 DDNS 域名为准</div>
 
 <div id="authCard" class="card" style="display:none">
@@ -59,7 +60,8 @@ a{color:#60a5fa}
     <label>私钥（可选，留空 = 不改；有私钥时优先用私钥）</label><input id="owKey" type="password" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----">
 
     <h3 style="font-size:14px">服务与安全</h3>
-    <div class="grid"><div><label>端口</label><input id="port" type="number" value="5155"></div>
+    <div class="grid"><div><label>管理端口（仅内网）</label><input id="port" type="number" value="5155"></div>
+    <div><label>外网操作端口（无密码、无设置）</label><input id="publicPort" type="number" value="5055"></div>
     <div><label>协议</label><select id="tlsMode"><option value="http">http</option><option value="https">https（无证书时自动生成自签名）</option></select></div>
     <div><label>新管理密码（留空 = 不改）</label><input id="adminPw" type="password"></div></div>
     <p class="muted">改端口 / 协议需重启容器生效。外网访问建议：路由器只转发 5155 到 OpenWrt，管理页密码 + HTTPS，不要用桥接网络（WOL 发不出去）。</p>
@@ -119,12 +121,12 @@ async function loadCfg(){cfg=await api('/api/config');
   document.getElementById('ddnsV4').checked=cfg.ddns.enable_v4;document.getElementById('ddnsV6').checked=cfg.ddns.enable_v6;
   document.getElementById('ddnsInt').value=cfg.ddns.interval_sec||300;
   document.getElementById('owHost').value=cfg.openwrt.host||'';document.getElementById('owUser').value=cfg.openwrt.user||'';document.getElementById('owPort').value=cfg.openwrt.port||22;
-  document.getElementById('port').value=cfg.port||5155;document.getElementById('tlsMode').value=cfg.tls_mode||'http';
+  document.getElementById('port').value=cfg.port||5155;document.getElementById('publicPort').value=cfg.public_port||5055;document.getElementById('tlsMode').value=cfg.tls_mode||'http';
   document.getElementById('pcCfg').innerHTML=(cfg.pcs||[]).map(pcCfgHtml).join('');
 }
 async function saveCfg(){
   const pcs=[...document.querySelectorAll('[data-pc]')].map((el,i)=>({id:'pc'+(i+1),name:el.querySelector('.pc-name').value,ip:el.querySelector('.pc-ip').value,mac:el.querySelector('.pc-mac').value,broadcast_ip:el.querySelector('.pc-bc').value,ssh_user:el.querySelector('.pc-user').value,ssh_port:parseInt(el.querySelector('.pc-port').value||'22'),ssh_password:el.querySelector('.pc-pw').value,password_change:!!el.querySelector('.pc-pw').value,ssh_key:el.querySelector('.pc-key').value,key_change:!!el.querySelector('.pc-key').value}));
-  const body={port:parseInt(document.getElementById('port').value||'5155'),tls_mode:document.getElementById('tlsMode').value,
+  const body={port:parseInt(document.getElementById('port').value||'5155'),public_port:parseInt(document.getElementById('publicPort').value||'5055'),tls_mode:document.getElementById('tlsMode').value,
     ddns:{enabled:document.getElementById('ddnsEn').checked,domain:document.getElementById('ddnsDomain').value,token:document.getElementById('ddnsToken').value,token_change:!!document.getElementById('ddnsToken').value,enable_v4:document.getElementById('ddnsV4').checked,enable_v6:document.getElementById('ddnsV6').checked,interval_sec:parseInt(document.getElementById('ddnsInt').value||'300')},
     pcs,openwrt:{host:document.getElementById('owHost').value,user:document.getElementById('owUser').value,password:document.getElementById('owPw').value,password_change:!!document.getElementById('owPw').value,key:document.getElementById('owKey').value,key_change:!!document.getElementById('owKey').value,port:parseInt(document.getElementById('owPort').value||'22')},
     admin_password:document.getElementById('adminPw').value};
