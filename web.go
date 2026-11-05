@@ -25,6 +25,27 @@ import (
 //go:embed web/index.html
 var indexHTML []byte
 
+// 外网操作页（5055）专用资源：与管理页完全分开的 handler，只挂这些文件。
+//go:embed web/public.html
+var publicHTML []byte
+
+//go:embed web/icon.svg
+var iconSVG []byte
+
+//go:embed web/icon-192.png
+var icon192 []byte
+
+//go:embed web/icon-512.png
+var icon512 []byte
+
+//go:embed web/apple-touch-icon.png
+var appleTouchIcon []byte
+
+//go:embed web/manifest.webmanifest
+var manifestJSON []byte
+
+const appVersion = "1.1.0"
+
 func hashPassword(pw string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
 	return string(h), err
@@ -134,7 +155,7 @@ func routes() http.Handler {
 		_, _ = w.Write(indexHTML)
 	})
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true, "version": "1.0.0"})
+		writeJSON(w, 200, map[string]any{"ok": true, "version": appVersion})
 	})
 	mux.HandleFunc("/api/me", func(w http.ResponseWriter, r *http.Request) {
 		c := getConfig()
@@ -221,14 +242,15 @@ func routes() http.Handler {
 				"last_update": dUpd, "last_error": dErr,
 				"last_success": dOk,
 			},
-			"port": c.Port, "tls_mode": c.TLSMode,
+			"port": c.Port, "public_port": c.PublicPort, "tls_mode": c.TLSMode,
+			// 管理页 access_url 改为外网操作页：外网请走 DDNS:5055，内网请直接走 内网IP:5155
 			"access_url": func() string {
 				if c.DDNS.Domain != "" {
 					scheme := "http"
 					if c.TLSMode == "https" {
 						scheme = "https"
 					}
-					return fmt.Sprintf("%s://%s:%d", scheme, c.DDNS.Domain, c.Port)
+					return fmt.Sprintf("%s://%s:%d", scheme, c.DDNS.Domain, c.PublicPort)
 				}
 				return ""
 			}(),
@@ -307,8 +329,9 @@ func routes() http.Handler {
 			return
 		}
 		var in struct {
-			Port    int    `json:"port"`
-			TLSMode string `json:"tls_mode"`
+			Port       int    `json:"port"`
+			PublicPort int    `json:"public_port"`
+			TLSMode    string `json:"tls_mode"`
 			DDNS    struct {
 				Enabled     bool   `json:"enabled"`
 				Token       string `json:"token"`
@@ -350,6 +373,9 @@ func routes() http.Handler {
 		old := cfg
 		if in.Port != 0 {
 			cfg.Port = in.Port
+		}
+		if in.PublicPort != 0 {
+			cfg.PublicPort = in.PublicPort
 		}
 		if in.TLSMode == "http" || in.TLSMode == "https" {
 			cfg.TLSMode = in.TLSMode
@@ -457,22 +483,182 @@ func ensureTLS(domain string) (certFile, keyFile string, err error) {
 	return certFile, keyFile, nil
 }
 
+var (
+	tlsCertFile, tlsKeyFile string
+	tlsPrepared             bool
+)
+
+// prepareTLS 只在启动时跑一次，避免管理口和外网口同时生成自签名证书竞态。
+func prepareTLS() error {
+	c := getConfig()
+	if c.TLSMode != "https" || tlsPrepared {
+		return nil
+	}
+	certFile, keyFile, err := ensureTLS(c.DDNS.Domain)
+	if err != nil {
+		return err
+	}
+	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		return err
+	}
+	tlsCertFile, tlsKeyFile, tlsPrepared = certFile, keyFile, true
+	return nil
+}
+
 func serve() error {
 	c := getConfig()
 	addr := fmt.Sprintf(":%d", c.Port)
 	srv := &http.Server{Addr: addr, Handler: routes()}
 	if c.TLSMode == "https" {
-		certFile, keyFile, err := ensureTLS(c.DDNS.Domain)
-		if err != nil {
-			return err
-		}
-		// 顺便校验证书能加载
-		if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
-			return err
-		}
-		fmt.Printf("OpenWake listening on https://0.0.0.0:%d\n", c.Port)
-		return srv.ListenAndServeTLS(certFile, keyFile)
+		fmt.Printf("OpenWake management listening on https://0.0.0.0:%d (LAN only: router forwards only %d)\n", c.Port, c.PublicPort)
+		return srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 	}
-	fmt.Printf("OpenWake listening on http://0.0.0.0:%d\n", c.Port)
+	fmt.Printf("OpenWake management listening on http://0.0.0.0:%d (LAN only: router forwards only %d)\n", c.Port, c.PublicPort)
 	return srv.ListenAndServe()
+}
+
+func servePublic() error {
+	c := getConfig()
+	addr := fmt.Sprintf(":%d", c.PublicPort)
+	srv := &http.Server{Addr: addr, Handler: publicRoutes()}
+	if c.TLSMode == "https" {
+		fmt.Printf("OpenWake public listening on https://0.0.0.0:%d (no password, no settings)\n", c.PublicPort)
+		return srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+	}
+	fmt.Printf("OpenWake public listening on http://0.0.0.0:%d (no password, no settings)\n", c.PublicPort)
+	return srv.ListenAndServe()
+}
+
+// ---- 外网操作页（5055）：无密码、无设置，与管理页彻底隔离 ----
+// 只挂：首页、图标/manifest、公开状态、PC 4 个动作中的 3 个 + OP 关机。
+// 刻意不挂：/api/config、/api/login、/api/me、/api/status（完整版）、/api/ddns/*，
+// 也不返回 PC 的 IP/MAC、OpenWrt 的 IP、任何 Token/密码。其他路径一律 404。
+// 加固（不改变“无密码”体验）：POST 要求同源（Origin 与请求 Host 同域名时才放行，
+// 跨站页面无法直接发请求）、不设 CORS 头、同一目标同一动作 5 秒内只放行一次防连点。
+
+var (
+	publicActionMu   sync.Mutex
+	publicActionLast = map[string]time.Time{}
+)
+
+func publicPostGuard(w http.ResponseWriter, r *http.Request, key string) bool {
+	if r.Method != "POST" {
+		writeJSON(w, 405, map[string]any{"error": "method"})
+		return false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		// Origin 形如 https://example.com:5055，取 host 部分与请求 Host 的 host 部分比对（忽略端口）
+		oh := origin
+		if i := strings.Index(oh, "://"); i >= 0 {
+			oh = oh[i+3:]
+		}
+		if i := strings.Index(oh, "/"); i >= 0 {
+			oh = oh[:i]
+		}
+		oh, _, _ = strings.Cut(oh, ":")
+		rh, _, _ := strings.Cut(r.Host, ":")
+		if oh != "" && rh != "" && oh != rh {
+			writeJSON(w, 403, map[string]any{"error": "跨站请求被拒绝"})
+			return false
+		}
+	}
+	publicActionMu.Lock()
+	defer publicActionMu.Unlock()
+	if last, ok := publicActionLast[key]; ok && time.Since(last) < 5*time.Second {
+		writeJSON(w, 429, map[string]any{"error": "操作太频繁，请稍后再试"})
+		return false
+	}
+	publicActionLast[key] = time.Now()
+	return true
+}
+
+func publicRoutes() http.Handler {
+	mux := http.NewServeMux()
+	serveBytes := func(b []byte, ct string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			_, _ = w.Write(b)
+		}
+	}
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(publicHTML)
+	})
+	mux.HandleFunc("/manifest.webmanifest", serveBytes(manifestJSON, "application/manifest+json"))
+	mux.HandleFunc("/icon.svg", serveBytes(iconSVG, "image/svg+xml"))
+	mux.HandleFunc("/icon-192.png", serveBytes(icon192, "image/png"))
+	mux.HandleFunc("/icon-512.png", serveBytes(icon512, "image/png"))
+	mux.HandleFunc("/apple-touch-icon.png", serveBytes(appleTouchIcon, "image/png"))
+	mux.HandleFunc("/favicon.ico", serveBytes(icon192, "image/png"))
+	mux.HandleFunc("/api/public/health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": true, "version": appVersion})
+	})
+	// 公开状态：只给名字和开关机状态，不给 IP/MAC/主机地址
+	mux.HandleFunc("/api/public/status", func(w http.ResponseWriter, r *http.Request) {
+		statusMu.RLock()
+		pcs := pcStatuses
+		owOn := owOnline
+		statusMu.RUnlock()
+		if pcs == nil {
+			pcs = []pcStatus{}
+		}
+		out := make([]map[string]any, 0, len(pcs))
+		for _, p := range pcs {
+			out = append(out, map[string]any{"id": p.ID, "name": p.Name, "online": p.Online})
+		}
+		writeJSON(w, 200, map[string]any{"pcs": out, "openwrt": map[string]any{"online": owOn}})
+	})
+	mux.HandleFunc("/api/public/pc/", func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/public/pc/"), "/")
+		if len(parts) != 2 {
+			writeJSON(w, 404, map[string]any{"error": "not found"})
+			return
+		}
+		if !publicPostGuard(w, r, "pc:"+parts[0]+":"+parts[1]) {
+			return
+		}
+		pc := findPC(getConfig(), parts[0])
+		if pc == nil {
+			writeJSON(w, 404, map[string]any{"error": "找不到该 PC"})
+			return
+		}
+		var err error
+		var msg string
+		switch parts[1] {
+		case "wake":
+			err = sendWOL(*pc)
+			msg = "魔术包已发送"
+		case "shutdown":
+			err = windowsShutdown(*pc)
+			msg = "关机命令已发送"
+		case "restart":
+			err = windowsRestart(*pc)
+			msg = "重启命令已发送"
+		default:
+			writeJSON(w, 404, map[string]any{"error": "未知动作"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		go func() { time.Sleep(3 * time.Second); refreshStatuses() }()
+		writeJSON(w, 200, map[string]any{"ok": true, "message": msg})
+	})
+	mux.HandleFunc("/api/public/openwrt/poweroff", func(w http.ResponseWriter, r *http.Request) {
+		if !publicPostGuard(w, r, "openwrt:poweroff") {
+			return
+		}
+		if err := openWrtPoweroff(getConfig()); err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "message": "OpenWrt 关机命令已发送"})
+	})
+	return mux
 }

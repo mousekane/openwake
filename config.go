@@ -46,8 +46,9 @@ type DDNSConfig struct {
 
 type Config struct {
 	AdminHash string         `json:"admin_hash"` // bcrypt，空 = 未设置，需先走 /setup
-	Port      int            `json:"port"`
-	TLSMode   string         `json:"tls_mode"` // http | https（https 且无证书时自动生成自签名证书）
+	Port      int            `json:"port"`       // 管理页：仅内网访问，路由器只转发 PublicPort，不转发本端口
+	PublicPort int           `json:"public_port"` // 外网操作页：无密码、无设置，仅状态+4 个动作，路由器只转发本端口
+	TLSMode   string         `json:"tls_mode"` // http | https（https 且无证书时自动生成自签名证书），两个端口共用
 	DDNS      DDNSConfig     `json:"ddns"`
 	PCs       []PCConfig     `json:"pcs"`
 	OpenWrt   SSHHostConfig  `json:"openwrt"`
@@ -71,8 +72,9 @@ func dataDirFromEnv() string {
 
 func defaultConfig() *Config {
 	return &Config{
-		Port:    5155,
-		TLSMode: "http",
+		Port:       5155,
+		PublicPort: 5055,
+		TLSMode:    "http",
 		DDNS: DDNSConfig{
 			EnableV4: true, EnableV6: true, IntervalSec: 300,
 		},
@@ -97,6 +99,12 @@ func loadConfig() *Config {
 	}
 	if c.Port == 0 {
 		c.Port = 5155
+	}
+	if v := os.Getenv("OW_PUBLIC_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.PublicPort)
+	}
+	if c.PublicPort == 0 {
+		c.PublicPort = 5055
 	}
 	if v := os.Getenv("CF_TOKEN"); v != "" && c.DDNS.Token == "" {
 		c.DDNS.Token = v
@@ -202,7 +210,7 @@ func maskedConfig(c *Config) map[string]any {
 		})
 	}
 	return map[string]any{
-		"port": c.Port, "tls_mode": c.TLSMode,
+		"port": c.Port, "public_port": c.PublicPort, "tls_mode": c.TLSMode,
 		"ddns": map[string]any{
 			"enabled": c.DDNS.Enabled, "domain": c.DDNS.Domain,
 			"token_set": c.DDNS.Token != "", "enable_v4": c.DDNS.EnableV4,

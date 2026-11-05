@@ -1,7 +1,9 @@
 # OpenWake 一键部署（OpenWrt Docker / 任意 Linux Docker）
 # 关键：必须用 network_mode: host。
 # 原因：WOL 魔术包是局域网广播，桥接网络发不出去；host 模式下容器与宿主机同网段，
-# ping/ARP/广播/网关探测才都正常。host 模式下 ports 段无效，服务直接占宿主机 5155。
+# ping/ARP/广播/网关探测才都正常。host 模式下 ports 段无效，服务直接占宿主机 5155 + 5055。
+# 端口分工：5155 管理页（有密码、有设置）仅内网访问，路由器不要转发 5155；
+# 5055 外网操作页（无密码、无设置，仅状态+开关机）是唯一需要转发的端口。
 services:
   openwake:
     image: ghcr.io/mousekane/openwake:latest

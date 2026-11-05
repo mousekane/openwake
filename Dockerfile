@@ -15,6 +15,6 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates iputils tzdata
 COPY --from=builder /openwake /openwake
 VOLUME ["/data"]
-EXPOSE 5155
+EXPOSE 5155 5055
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD wget -qO- http://127.0.0.1:5155/api/health || exit 1
 ENTRYPOINT ["/openwake"]
