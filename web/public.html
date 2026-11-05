@@ -26,6 +26,7 @@ header h1{font-size:32px;margin:0;letter-spacing:.02em}
 .ring.on{background:rgba(34,197,94,.08);box-shadow:0 0 34px rgba(34,197,94,.45),inset 0 0 24px rgba(34,197,94,.25);animation:breathe 2.4s ease-in-out infinite}
 .ring.off{border-color:rgba(239,68,68,.85);background:rgba(239,68,68,.08);box-shadow:0 0 22px rgba(239,68,68,.30)}
 @keyframes breathe{0%,100%{box-shadow:0 0 26px rgba(34,197,94,.35),inset 0 0 20px rgba(34,197,94,.20)}50%{box-shadow:0 0 48px rgba(34,197,94,.65),inset 0 0 30px rgba(34,197,94,.35)}}
+.ring svg{display:block;margin:0 auto}
 .ring .sub{display:block;font-size:15px;letter-spacing:.1em;margin-top:2px}
 .ring-state{text-align:center;font-size:14px;font-weight:600;letter-spacing:.18em;margin-top:12px}
 .ring-state.is-on{color:#22c55e}
@@ -49,7 +50,7 @@ header h1{font-size:32px;margin:0;letter-spacing:.02em}
 <header><img src="/icon-192.png" alt="OpenWake"><h1>OpenWake</h1></header>
 <div id="rings"></div>
 <div class="divider"></div>
-<div class="ring-wrap"><div class="ring on" onclick="ask('openwrt')"><span>⏻<span class="sub">OP</span></span></div><div class="ring-state is-on">NOW: ON</div></div>
+<div class="ring-wrap"><div class="ring on" onclick="ask('openwrt')"><span><svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><line x1="12" y1="2" x2="12" y2="12"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/></svg><span class="sub">OP</span></span></div><div class="ring-state is-on">NOW: ON</div></div>
 </div>
 <div id="overlay" class="overlay"><div class="modal"><p class="small">请确认</p><h2 id="actTitle">关机</h2><div class="row"><button class="btn cancel" onclick="closeModal()">取消</button><button id="confirmBtn" class="btn confirm-red" onclick="doAct()">确认</button></div></div></div>
 <div id="toast" class="toast"></div>
@@ -63,7 +64,7 @@ async function load(){
     document.getElementById('rings').innerHTML=pcs.length?pcs.map(p=>{
       const label=pcs.length===1?'PC':(p.name||p.id);
       const act=p.online?'shutdown':'wake';
-      return `<div class="ring-wrap"><div class="ring ${p.online?'on':'off'}" onclick="ask('pc','${p.id}','${act}')"><span>⏻<span class="sub">${label}</span></span></div><div class="ring-state ${p.online?'is-on':'is-off'}">NOW: ${p.online?'ON':'OFF'}</div></div>`;
+      return `<div class="ring-wrap"><div class="ring ${p.online?'on':'off'}" onclick="ask('pc','${p.id}','${act}')"><span><svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><line x1="12" y1="2" x2="12" y2="12"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/></svg><span class="sub">${label}</span></span></div><div class="ring-state ${p.online?'is-on':'is-off'}">NOW: ${p.online?'ON':'OFF'}</div></div>`;
     }).join(''):'<div class="empty">暂无 PC</div>';
   }catch(e){toast(e.message)}
 }
