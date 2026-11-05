@@ -44,7 +44,7 @@ var appleTouchIcon []byte
 //go:embed web/manifest.webmanifest
 var manifestJSON []byte
 
-const appVersion = "1.1.0"
+const appVersion = "1.2.0"
 
 func hashPassword(pw string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
@@ -530,7 +530,7 @@ func servePublic() error {
 }
 
 // ---- 外网操作页（5055）：无密码、无设置，与管理页彻底隔离 ----
-// 只挂：首页、图标/manifest、公开状态、PC 4 个动作中的 3 个 + OP 关机。
+// 只挂：首页、图标/manifest、公开状态、PC 开机/关机（点大圆环切换，无重启按钮）+ OP 关机。
 // 刻意不挂：/api/config、/api/login、/api/me、/api/status（完整版）、/api/ddns/*，
 // 也不返回 PC 的 IP/MAC、OpenWrt 的 IP、任何 Token/密码。其他路径一律 404。
 // 加固（不改变“无密码”体验）：POST 要求同源（Origin 与请求 Host 同域名时才放行，
@@ -636,10 +636,8 @@ func publicRoutes() http.Handler {
 		case "shutdown":
 			err = windowsShutdown(*pc)
 			msg = "关机命令已发送"
-		case "restart":
-			err = windowsRestart(*pc)
-			msg = "重启命令已发送"
 		default:
+			// v1.2：外网页已删一键重启，公开接口也不再接受 restart（重启只在 5155 管理页，登录后可用）
 			writeJSON(w, 404, map[string]any{"error": "未知动作"})
 			return
 		}
