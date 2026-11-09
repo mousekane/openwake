@@ -37,14 +37,6 @@ a{color:#60a5fa}
     <p class="muted">通过 SSH 到宿主机执行 poweroff。宿主机地址留空时自动取容器默认网关（host 网络模式下即 OpenWrt 本身）。执行前会二次确认，关机后需手动按电源键恢复。</p>
   </div>
 
-  <div class="card"><h2>Agent API（供 AI 调用，v1.3）</h2>
-    <div id="agentBox" class="muted">加载中…</div>
-    <div class="row" style="margin-top:10px"><button onclick="agentGen()">生成新密钥</button><button class="ghost" onclick="agentRevoke()">吊销密钥</button><button class="ghost" onclick="loadAgentAudit()">刷新操作记录</button></div>
-    <div id="agentKeyBox" style="margin-top:10px"></div>
-    <div id="agentAuditBox" class="muted" style="margin-top:10px"></div>
-    <p class="muted">接口挂在 5055 公网入口，路径 /api/v1/agent/*，调用必须带 Authorization: Bearer 密钥。MCP Server 也在同一入口：/mcp（Streamable HTTP），工具与 REST 接口一一对应，同一把密钥。密钥等同于整机开关机权限，泄露立即点“生成新密钥”轮换（旧密钥立刻失效）。每次调用都记审计日志。接口文档见 README v1.3 / v1.4 两节。</p>
-  </div>
-
   <div class="card"><h2>配置 <button class="ghost" onclick="toggleCfg()">展开 / 收起</button></h2>
   <div id="cfgBox" style="display:none">
     <h3 style="font-size:14px">DDNS（仅 Cloudflare API Token）</h3>
@@ -72,7 +64,7 @@ a{color:#60a5fa}
     <div><label>外网操作端口（无密码、无设置）</label><input id="publicPort" type="number" value="5055"></div>
     <div><label>协议</label><select id="tlsMode"><option value="http">http</option><option value="https">https（无证书时自动生成自签名）</option></select></div>
     <div><label>新管理密码（留空 = 不改）</label><input id="adminPw" type="password"></div></div>
-    <p class="muted">改端口 / 协议需重启容器生效。外网访问建议：路由器只转发 5155 到 OpenWrt，管理页密码 + HTTPS，不要用桥接网络（WOL 发不出去）。</p>
+    <p class="muted">改端口 / 协议需重启容器生效。外网只转发 5055，管理页 5155 仅内网访问；不要用桥接网络（WOL 发不出去）。</p>
     <div class="row"><button onclick="saveCfg()">保存配置</button><button class="ghost" onclick="ddnsRefresh()">立即刷新 DDNS</button></div>
   </div></div>
 </div>
@@ -90,10 +82,7 @@ async function init(){
     document.getElementById('authBtn').onclick=async()=>{const pw=document.getElementById('authPw').value;try{await api('/api/login','POST',{password:pw});location.reload()}catch(e){toast(e.message)}};
   }else{main.style.display='block';await loadAll();setInterval(loadStatus,15000)}
 }
-async function loadAll(){await loadStatus();await loadCfg();await loadAgentAudit()}
-async function agentGen(){if(!confirm('生成新密钥后，旧密钥立刻失效，正在用的 agent 需要换新密钥。确定吗？'))return;try{const r=await api('/api/agent/key/generate','POST',{});document.getElementById('agentKeyBox').innerHTML='<span style="color:#f87171">新密钥只显示这一次，请立即复制保存：</span><br><span class="mono">'+r.key+'</span>';toast('新密钥已生成');await loadCfg();await loadAgentAudit()}catch(e){toast(e.message)}}
-async function agentRevoke(){if(!confirm('吊销后 agent API 立刻停用，所有调用都会失败。确定吗？'))return;try{const r=await api('/api/agent/key/revoke','POST',{});document.getElementById('agentKeyBox').innerHTML='';toast(r.message);await loadCfg();await loadAgentAudit()}catch(e){toast(e.message)}}
-async function loadAgentAudit(){try{const r=await api('/api/agent/audit');document.getElementById('agentAuditBox').innerHTML=(r.entries||[]).length?('<b>最近 Agent 操作</b><br>'+r.entries.map(e=>e.time+' · '+e.action+' · '+e.target+' · '+e.result+(e.detail?' · '+e.detail:'')).join('<br>')):'暂无 Agent 操作记录。'}catch(e){document.getElementById('agentAuditBox').innerHTML='操作记录加载失败：'+e.message}}
+async function loadAll(){await loadStatus();await loadCfg()}
 async function loadStatus(){
   try{const s=await api('/api/status');
     document.getElementById('ddnsBox').innerHTML='DDNS：'+(s.ddns.enabled?'已启用':'未启用')+' · 域名 '+(s.ddns.domain||'未填')+'<br>IPv4 '+(s.ddns.ipv4||'-')+' · IPv6 '+(s.ddns.ipv6||'-')+'<br>上次更新 '+(s.ddns.last_update||'-')+(s.ddns.last_error?('<br><span style="color:#f87171">错误：'+s.ddns.last_error+'</span>'):'');
@@ -128,7 +117,6 @@ function pcCfgHtml(p,i){return `<div class="card" style="background:#0f172a" dat
   <button class="ghost" onclick="this.closest('[data-pc]').remove()">删除这台</button></div>`}
 function addPcCfg(){document.getElementById('pcCfg').insertAdjacentHTML('beforeend',pcCfgHtml({ssh_port:22},Date.now()))}
 async function loadCfg(){cfg=await api('/api/config');
-  document.getElementById('agentBox').innerHTML=cfg.agent_api_key_set?'已启用：密钥已设置（原文不回显）。接口：<span class="mono">/api/v1/agent/*</span>（5055 端口，Bearer 认证）':'未启用：点“生成新密钥”后即可用。';
   document.getElementById('ddnsEn').checked=cfg.ddns.enabled;document.getElementById('ddnsDomain').value=cfg.ddns.domain||'';
   document.getElementById('ddnsV4').checked=cfg.ddns.enable_v4;document.getElementById('ddnsV6').checked=cfg.ddns.enable_v6;
   document.getElementById('ddnsInt').value=cfg.ddns.interval_sec||300;
