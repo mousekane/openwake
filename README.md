@@ -49,6 +49,35 @@ curl -X POST -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/a
 
 安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。
 
+## v1.4 MCP Server（供只认 MCP 的 agent）
+
+REST API 只有具备 HTTP 调用能力的 agent 能直接调；Claude Desktop、Cherry Studio 等只认 MCP 的 agent 需要一个 MCP Server。v1.4 把 MCP Server 直接做进 OpenWake，包同一批能力、同一把密钥，不用另起服务。
+
+- 地址：`http://<DDNS域名>:5055/mcp`，走 Streamable HTTP（无状态，每次 POST 直接回 JSON-RPC 响应）
+- 认证：请求头 `Authorization: Bearer <密钥>`，与 v1.3 同一把密钥；未生成密钥时返回 503，密钥错误返回 401
+- 工具（8 个，与 REST 接口一一对应）：`openwake_health`、`openwake_status`、`openwake_audit`、`openwake_pc_wake`、`openwake_pc_shutdown`、`openwake_pc_restart`、`openwake_openwrt_poweroff`、`openwake_ddns_refresh`；写操作同样 5 秒冷却并记审计日志
+
+支持远程 MCP 的客户端（如 Cherry Studio），直接填地址 + 请求头就能接管：
+
+```json
+{
+  "mcpServers": {
+    "openwake": {
+      "url": "http://openwake.555554444.xyz:5055/mcp",
+      "headers": { "Authorization": "Bearer 你的密钥" }
+    }
+  }
+}
+```
+
+只支持本地 stdio 的客户端（如旧版 Claude Desktop），用桥接工具转接，例如：
+
+```bash
+npx -y mcp-remote http://openwake.555554444.xyz:5055/mcp --header "Authorization: Bearer 你的密钥"
+```
+
+两种接入方式的能力、认证、审计完全一致：REST 给能发 HTTP 的 agent，MCP 给只认 MCP 的 agent。
+
 ## 一键部署（OpenWrt / Linux Docker）
 
 ```sh

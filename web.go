@@ -45,7 +45,7 @@ var appleTouchIcon []byte
 //go:embed web/manifest.webmanifest
 var manifestJSON []byte
 
-const appVersion = "1.3.0"
+const appVersion = "1.4.0"
 
 func hashPassword(pw string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
@@ -660,7 +660,8 @@ func servePublic() error {
 
 // ---- 外网操作页（5055）：无密码、无设置，与管理页彻底隔离 ----
 // 只挂：首页、图标/manifest、公开状态、PC 开机/关机（点大圆环切换，无重启按钮）+ OP 关机，
-// 外加 v1.3 Agent API（/api/v1/agent/*，Bearer 密钥认证，无密钥/错密钥一律 401/503）。
+// 外加 v1.3 Agent API（/api/v1/agent/*，Bearer 密钥认证，无密钥/错密钥一律 401/503）
+// 与 v1.4 MCP Server（/mcp，Streamable HTTP，同密钥）。
 // 刻意不挂：/api/config、/api/login、/api/me、/api/status（完整版）、/api/ddns/*，
 // 也不返回 PC 的 IP/MAC、OpenWrt 的 IP、任何 Token/密码。其他路径一律 404。
 // 加固（不改变“无密码”体验）：POST 要求同源（Origin 与请求 Host 同域名时才放行，
@@ -728,6 +729,8 @@ func publicRoutes() http.Handler {
 	mux.HandleFunc("/api/public/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": appVersion})
 	})
+	// v1.4 MCP Server（Streamable HTTP，无状态），与 Agent API 共用 Bearer 密钥
+	mux.HandleFunc("/mcp", mcpHandler)
 	// 公开状态：只给名字和开关机状态，不给 IP/MAC/主机地址
 	mux.HandleFunc("/api/public/status", func(w http.ResponseWriter, r *http.Request) {
 		statusMu.RLock()
