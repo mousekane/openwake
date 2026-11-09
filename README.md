@@ -47,7 +47,7 @@ curl -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/ag
 curl -X POST -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/agent/pc/pc1/wake
 ```
 
-安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。
+安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。从云端调用时同样必须走 HTTPS（原因见下节 MCP 的提醒）；局域网内直连 HTTP 即可。
 
 ## v1.4 MCP Server（供只认 MCP 的 agent）
 
@@ -56,6 +56,8 @@ REST API 只有具备 HTTP 调用能力的 agent 能直接调；Claude Desktop�
 - 地址：`http://<DDNS域名>:5055/mcp`，走 Streamable HTTP（无状态，每次 POST 直接回 JSON-RPC 响应）
 - 认证：请求头 `Authorization: Bearer <密钥>`，与 v1.3 同一把密钥；未生成密钥时返回 503，密钥错误返回 401
 - 工具（8 个，与 REST 接口一一对应）：`openwake_health`、`openwake_status`、`openwake_audit`、`openwake_pc_wake`、`openwake_pc_shutdown`、`openwake_pc_restart`、`openwake_openwrt_poweroff`、`openwake_ddns_refresh`；写操作同样 5 秒冷却并记审计日志
+
+> **⚠️ 用 MCP 前先看：从云端调用必须配 HTTPS，局域网内不用。** 从云端调 `/mcp`（如 Muse 自定义连接器）时，地址必须是 `https://`：实测某些客户端的凭证中转机制只在 HTTPS 请求上才把替身换成真密钥，明文 HTTP 到达服务器的仍是替身，服务器回 401——即使密钥本身完全正确；而且密钥走明文 HTTP 会在公网裸奔。做法：用 Lucky 反向代理 + Let's Encrypt 证书把 5055 反代成 HTTPS，或直接给 OpenWake 配正式证书开 `tls_mode=https`（证书放 `/data/cert.pem` + `/data/key.pem` 并重启）。**局域网内直连不需要 HTTPS**，`http://<内网IP>:5055/mcp` 就行：客户端直接发真密钥，服务器正常认（实测豆包走内网地址就是这么通的）。
 
 支持远程 MCP 的客户端（如 Cherry Studio），直接填地址 + 请求头就能接管：
 
