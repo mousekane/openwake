@@ -23,6 +23,32 @@ OpenWrt Docker 程序：DDNS + Wake-on-LAN + SSH 开关机，全部收进一个 
 
 额外加了一层本该有的东西：**管理页登录密码**。否则 DDNS 域名一公开，任何人都能远程关你的电脑。首次打开页面先设密码（bcrypt 存于容器内 `/data/config.json`），之后所有开关机接口都要登录态。
 
+## v1.3 Agent API（供 AI 调用）
+
+为 AI agent 接管预留的版本化接口，挂在 **5055 公网入口**，路径 `/api/v1/agent/*`，全部要求 `Authorization: Bearer <密钥>`。无密钥时接口返回 503（未启用），密钥错误返回 401。统一返回 `{"ok":bool, "data"/"message", "error"}`；写操作同一目标同一动作 5 秒冷却，全部记审计日志（最近 100 条，管理页可见，也可调接口查）。
+
+密钥在 5155 管理页“Agent API”卡片里生成、吊销：生成即轮换旧密钥，**新密钥只显示一次**，请立即复制保存。密钥等同于整机开关机权限，泄露立即轮换。
+
+| 接口 | 方法 | 说明 |
+|---|---|---|
+| `/api/v1/agent/health` | GET | 健康检查，返回版本号 |
+| `/api/v1/agent/status` | GET | 全部 PC 开关机状态 + OP 状态（不返回 IP/MAC/主机地址） |
+| `/api/v1/agent/audit` | GET | 最近 Agent 操作审计记录 |
+| `/api/v1/agent/pc/{id}/wake` | POST | 发送 WOL 魔术包 |
+| `/api/v1/agent/pc/{id}/shutdown` | POST | SSH 关机 Win PC |
+| `/api/v1/agent/pc/{id}/restart` | POST | SSH 重启 Win PC（公开页没有这个，agent 有） |
+| `/api/v1/agent/openwrt/poweroff` | POST | SSH 关机 OpenWrt |
+| `/api/v1/agent/ddns/refresh` | POST | 立即刷新一次 DDNS |
+
+示例（把 `KEY` 换成你生成的密钥，域名换成你自己的）：
+
+```bash
+curl -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/agent/status
+curl -X POST -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/agent/pc/pc1/wake
+```
+
+安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。
+
 ## 一键部署（OpenWrt / Linux Docker）
 
 ```sh
