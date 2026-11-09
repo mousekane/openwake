@@ -23,74 +23,36 @@ OpenWrt Docker 程序：DDNS + Wake-on-LAN + SSH 开关机，全部收进一个 
 
 额外加了一层本该有的东西：**管理页登录密码**。否则 DDNS 域名一公开，任何人都能远程关你的电脑。首次打开页面先设密码（bcrypt 存于容器内 `/data/config.json`），之后所有开关机接口都要登录态。
 
-## v1.3 Agent API（供 AI 调用）
+## v1.5 只走网页 POST（Agent API 与 MCP 已删除）
 
-为 AI agent 接管预留的版本化接口，挂在 **5055 公网入口**，路径 `/api/v1/agent/*`，全部要求 `Authorization: Bearer <密钥>`。无密钥时接口返回 503（未启用），密钥错误返回 401。统一返回 `{"ok":bool, "data"/"message", "error"}`；写操作同一目标同一动作 5 秒冷却，全部记审计日志（最近 100 条，管理页可见，也可调接口查）。
+v1.3 的 Agent API（`/api/v1/agent/*`）和 v1.4 的 MCP Server（`/mcp`、`/sse`、`/messages`）已在 v1.5 彻底删除：不再提供密钥认证接口，也不再记审计日志。控制只剩一条路：**5055 网页上的 POST 接口**，也就是圆环按钮本身调的接口。
 
-密钥在 5155 管理页“Agent API”卡片里生成、吊销：生成即轮换旧密钥，**新密钥只显示一次**，请立即复制保存。密钥等同于整机开关机权限，泄露立即轮换。
+网页按钮调的就是这些接口，直接发同样的 POST 就是“模拟点击”，确认弹窗只是网页自己的 JS，直接调接口自动跳过：
 
 | 接口 | 方法 | 说明 |
 |---|---|---|
-| `/api/v1/agent/health` | GET | 健康检查，返回版本号 |
-| `/api/v1/agent/status` | GET | 全部 PC 开关机状态 + OP 状态（不返回 IP/MAC/主机地址） |
-| `/api/v1/agent/audit` | GET | 最近 Agent 操作审计记录 |
-| `/api/v1/agent/pc/{id}/wake` | POST | 发送 WOL 魔术包 |
-| `/api/v1/agent/pc/{id}/shutdown` | POST | SSH 关机 Win PC |
-| `/api/v1/agent/pc/{id}/restart` | POST | SSH 重启 Win PC（公开页没有这个，agent 有） |
-| `/api/v1/agent/openwrt/poweroff` | POST | SSH 关机 OpenWrt |
-| `/api/v1/agent/ddns/refresh` | POST | 立即刷新一次 DDNS |
+| `/api/public/health` | GET | 健康检查，返回版本号 |
+| `/api/public/status` | GET | 全部 PC 开关机状态 + OP 状态（只给名字和状态，不返回 IP/MAC/主机地址） |
+| `/api/public/pc/{id}/wake` | POST | 发送 WOL 魔术包 |
+| `/api/public/pc/{id}/shutdown` | POST | SSH 关机 Win PC |
+| `/api/public/openwrt/poweroff` | POST | SSH 关机 OpenWrt |
 
-示例（把 `KEY` 换成你生成的密钥，域名换成你自己的）：
+示例：
 
 ```bash
-curl -H "Authorization: Bearer KEY" http://<DDNS域名>:5055/api/v1/agent/status
-curl -X POST -H "Authorization: Bearer KEY" http://<DDNS域名>:5055/api/v1/agent/pc/pc1/wake
+curl -X POST http://<DDNS域名>:5055/api/public/pc/pc1/wake
+curl -X POST http://<DDNS域名>:5055/api/public/pc/pc1/shutdown
+curl http://<DDNS域名>:5055/api/public/status
 ```
 
-安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。从云端调用时同样必须走 HTTPS（原因和配法见下节 MCP 的提醒与 Lucky 一节）；局域网内直连 HTTP 即可。
+注意：
 
-## v1.4 MCP Server（供只认 MCP 的 agent）
+- 明文 HTTP 即可，不用密钥、不用 HTTPS——请求里没有任何敏感信息，接口本身就是公开的（和网页按钮同一个）。
+- 没有重启接口：重启只在 5155 管理页（登录后可用）。
+- 同一目标同一动作 5 秒内只放行一次（防连点）；POST 有同源检查：带 Origin 但域名对不上的跨站请求会被拒绝，不带 Origin 的服务端调用直接放行。
+- 不记审计日志。谁点了、什么时候点的，服务器不再记录。
 
-REST API 只有具备 HTTP 调用能力的 agent 能直接调；Claude Desktop、Cherry Studio 等只认 MCP 的 agent 需要一个 MCP Server。v1.4 把 MCP Server 直接做进 OpenWake，包同一批能力、同一把密钥，不用另起服务。
-
-- 地址：`http://<DDNS域名>:5055/mcp`，走 Streamable HTTP（无状态，每次 POST 直接回 JSON-RPC 响应）
-- 认证：请求头 `Authorization: Bearer <密钥>`，与 v1.3 同一把密钥；未生成密钥时返回 503，密钥错误返回 401
-- 工具（8 个，与 REST 接口一一对应）：`openwake_health`、`openwake_status`、`openwake_audit`、`openwake_pc_wake`、`openwake_pc_shutdown`、`openwake_pc_restart`、`openwake_openwrt_poweroff`、`openwake_ddns_refresh`；写操作同样 5 秒冷却并记审计日志
-
-> **⚠️ 用 MCP 前先看：从云端调用必须配 HTTPS，局域网内不用。** 从云端调 `/mcp`（如 Muse 自定义连接器）时，地址必须是 `https://`：实测某些客户端的凭证中转机制只在 HTTPS 请求上才把替身换成真密钥，明文 HTTP 到达服务器的仍是替身，服务器回 401——即使密钥本身完全正确；而且密钥走明文 HTTP 会在公网裸奔。配法见下面“Lucky 配 HTTPS”一节（推荐），或直接给 OpenWake 配正式证书开 `tls_mode=https`（证书放 `/data/cert.pem` + `/data/key.pem` 并重启）。**局域网内直连不需要 HTTPS**，`http://<内网IP>:5055/mcp` 就行：客户端直接发真密钥，服务器正常认（实测豆包走内网地址就是这么通的）。
-
-### 用 Lucky 配 HTTPS（推荐）
-
-OpenWrt 上装了 Lucky 的话，不用在 OpenWake 里配证书，Lucky 反代 + 自动续期一次搞定（已实测可用）：
-
-1. **申请证书**：Lucky → SSL/TLS 证书 → 添加证书 → ACME → Let's Encrypt，域名填你的 DDNS 域名（如 `wake.example.com`），DNS 验证选 Cloudflare，填 API Token（需要 Zone:DNS:Edit 权限），申请后 Lucky 会自动续期，不用再管。
-2. **反向代理**：Lucky → Web 服务 → 添加反向代理，监听端口填 `8443`，开启 TLS 并选刚申请的证书，后端地址填 `http://127.0.0.1:5055`。
-3. **端口转发**：在光猫/主路由上把 `8443` 转发到 OpenWrt 内网 IP 的 `8443`。
-4. **验证**：`curl https://<DDNS域名>:8443/mcp` 应返回 401（无密钥是正常的，说明 TLS、反代、鉴权都通了）；带上密钥调一次应能列出 8 个工具。
-5. **改地址**：云端客户端的 MCP 地址改成 `https://<DDNS域名>:8443/mcp`。监听端口可以自选，改了端口就把地址里的端口跟着改。局域网内仍可继续用 `http://<内网IP>:5055/mcp`。
-
-支持远程 MCP 的客户端（如 Cherry Studio），直接填地址 + 请求头就能接管：
-
-```json
-{
-  "mcpServers": {
-    "openwake": {
-      "url": "http://wake.example.com:5055/mcp",
-      "headers": { "Authorization": "Bearer 你的密钥" }
-    }
-  }
-}
-```
-
-只支持本地 stdio 的客户端（如旧版 Claude Desktop），用桥接工具转接，例如：
-
-```bash
-npx -y mcp-remote http://wake.example.com:5055/mcp --header "Authorization: Bearer 你的密钥"
-```
-
-v1.4.1 兼容性补充：POST `/mcp` 在客户端只接受 SSE 时会回 SSE 流（`data: JSON`）；另提供旧版 SSE 传输——`GET /sse` 建会话（回 `endpoint` 事件给出去 `/messages?session_id=xxx`）+ `POST /messages` 发 JSON-RPC 请求，结果经 SSE 流回推。两条路同样走 Bearer 密钥认证。如果某个客户端连 `/mcp` 反复失败，可改试 SSE 传输。
-
-两种接入方式的能力、认证、审计完全一致：REST 给能发 HTTP 的 agent，MCP 给只认 MCP 的 agent。
+升级注意：旧版 `/data/config.json` 里残留的 `agent_api_key` 会被忽略（新版不再读取）；之前只为 MCP 配的 Lucky 8443 反代可以撤掉——公开接口走明文 5055 即可。
 
 ## 一键部署（OpenWrt / Linux Docker）
 
@@ -126,8 +88,8 @@ docker compose pull && docker compose up -d
    PC 端先做一次：设置 → 应用 → 可选功能 → 添加 **OpenSSH 服务器**，服务设自动启动，防火墙放行 22 端口，用管理员账号。
    开机前置：BIOS 开 Wake-on-LAN、网卡属性开“允许此设备唤醒计算机”，并**关闭 Windows 快速启动**（快速启动下关机是混合休眠，WOL 常失效）。
 3. **OpenWrt 关机**：宿主机 IP 留空时自动取容器默认网关（host 模式下即 OpenWrt 本身），填 root + 密码/私钥。
-4. **路由器转发**：只把 `5055` 转发到 OpenWrt，不要转发 `5155`，外网操作地址即 `http(s)://<DDNS域名>:5055`，内网管理地址是 `http://<OpenWrt-IP>:5155`。
-   外网访问务必开 HTTPS：页面配置里把协议切到 `https`，无证书时自动生成自签名证书（浏览器会提示不安全，点继续即可；要去掉提示就把正式证书放到 `/data/cert.pem` + `/data/key.pem` 并重启）。
+4. **路由器转发**：只把 `5055` 转发到 OpenWrt，不要转发 `5155`，外网操作地址即 `http://<DDNS域名>:5055`，内网管理地址是 `http://<OpenWrt-IP>:5155`。
+   公开页是明文 HTTP，不用配 HTTPS（没有登录、没有密钥，请求里没敏感信息）；想给公开页加 HTTPS 可在页面配置里把协议切到 `https`（无证书时自动生成自签名证书，浏览器会提示不安全；要去掉提示就把正式证书放到 `/data/cert.pem` + `/data/key.pem` 并重启），或在前面挂反代。
 
 ## 本地开发
 
@@ -143,8 +105,9 @@ main.go / config.go   配置与持久化（/data/config.json）
 ddns.go               Cloudflare DDNS（A/AAAA 独立）
 wol.go                魔术包构造与广播发送
 ssh.go                SSH 执行 + ping/端口状态探测
-web.go                HTTP API + 登录态 + TLS（自签名兜底）
+web.go                管理页 API + 公开页接口 + 登录态 + TLS（自签名兜底）
 web/index.html        管理页（无构建步骤，纯 HTML/JS）
+web/public.html       外网操作页（双大圆环，无构建步骤，纯 HTML/JS）
 Dockerfile            多架构静态编译，alpine 运行时
 docker-compose.yml    host 网络一键部署
 install.sh            一键拉取部署脚本

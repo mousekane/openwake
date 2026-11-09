@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -27,6 +26,7 @@ import (
 var indexHTML []byte
 
 // 外网操作页（5055）专用资源：与管理页完全分开的 handler，只挂这些文件。
+//
 //go:embed web/public.html
 var publicHTML []byte
 
@@ -45,7 +45,7 @@ var appleTouchIcon []byte
 //go:embed web/manifest.webmanifest
 var manifestJSON []byte
 
-const appVersion = "1.4.1"
+const appVersion = "1.5.0"
 
 func hashPassword(pw string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
@@ -85,95 +85,6 @@ func requireAuth(w http.ResponseWriter, r *http.Request) bool {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "未登录"})
 		return false
 	}
-	return true
-}
-
-// ---- v1.3 Agent API：供 AI agent 云端调用，挂 5055 公网入口，Bearer 密钥认证 ----
-// 密钥 = 整机开关机权限，泄露后在管理页点“生成新密钥”轮换（旧密钥立刻失效）。
-// 每次 agent 操作记审计日志（最近 100 条，内存里，重启清空；同时写服务端日志）。
-
-type agentAuditEntry struct {
-	Time   string `json:"time"`
-	Action string `json:"action"`
-	Target string `json:"target"`
-	Result string `json:"result"`
-	Detail string `json:"detail"`
-}
-
-var (
-	agentAuditMu sync.Mutex
-	agentAudit   []agentAuditEntry
-)
-
-func logAgent(action, target, result, detail string) {
-	e := agentAuditEntry{
-		Time: time.Now().Format("2006-01-02 15:04:05"), Action: action,
-		Target: target, Result: result, Detail: detail,
-	}
-	agentAuditMu.Lock()
-	agentAudit = append([]agentAuditEntry{e}, agentAudit...)
-	if len(agentAudit) > 100 {
-		agentAudit = agentAudit[:100]
-	}
-	agentAuditMu.Unlock()
-	fmt.Printf("[agent] %s %s %s: %s\n", e.Time, action, target, result)
-}
-
-func getAgentAudit() []agentAuditEntry {
-	agentAuditMu.Lock()
-	defer agentAuditMu.Unlock()
-	out := make([]agentAuditEntry, len(agentAudit))
-	copy(out, agentAudit)
-	if out == nil {
-		out = []agentAuditEntry{}
-	}
-	return out
-}
-
-// agentAuth：Authorization: Bearer <密钥>。未配置密钥时接口整体未启用（503）。
-func agentAuth(w http.ResponseWriter, r *http.Request) bool {
-	key := getConfig().AgentAPIKey
-	if key == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "agent api 未启用（请先在管理页生成密钥）"})
-		return false
-	}
-	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	got = strings.TrimSpace(got)
-	if got == "" || len(got) != len(key) || subtle.ConstantTimeCompare([]byte(got), []byte(key)) != 1 {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "未授权：密钥无效"})
-		return false
-	}
-	return true
-}
-
-// agentPostGuard：POST + 同源检查（与公开页一致，服务端调用一般无 Origin，直接放行）+ 同一目标同一动作 5 秒冷却。
-func agentPostGuard(w http.ResponseWriter, r *http.Request, key string) bool {
-	if r.Method != "POST" {
-		writeJSON(w, 405, map[string]any{"ok": false, "error": "method"})
-		return false
-	}
-	if origin := r.Header.Get("Origin"); origin != "" {
-		oh := origin
-		if i := strings.Index(oh, "://"); i >= 0 {
-			oh = oh[i+3:]
-		}
-		if i := strings.Index(oh, "/"); i >= 0 {
-			oh = oh[:i]
-		}
-		oh, _, _ = strings.Cut(oh, ":")
-		rh, _, _ := strings.Cut(r.Host, ":")
-		if oh != "" && rh != "" && oh != rh {
-			writeJSON(w, 403, map[string]any{"ok": false, "error": "跨站请求被拒绝"})
-			return false
-		}
-	}
-	publicActionMu.Lock()
-	defer publicActionMu.Unlock()
-	if last, ok := publicActionLast[key]; ok && time.Since(last) < 5*time.Second {
-		writeJSON(w, 429, map[string]any{"ok": false, "error": "操作太频繁，请稍后再试"})
-		return false
-	}
-	publicActionLast[key] = time.Now()
 	return true
 }
 
@@ -406,45 +317,6 @@ func routes() http.Handler {
 		writeJSON(w, 200, map[string]any{"ok": true, "message": "DDNS 刷新中，稍后查看结果"})
 	})
 
-	// v1.3：Agent API 密钥管理（仅 5155 管理页，登录后可用）。生成即轮换旧密钥，只回显一次。
-	mux.HandleFunc("/api/agent/key/generate", func(w http.ResponseWriter, r *http.Request) {
-		if !requireAuth(w, r) || r.Method != "POST" {
-			return
-		}
-		key := newAgentAPIKey()
-		cfgMu.Lock()
-		cfg.AgentAPIKey = key
-		err := saveConfigLocked()
-		cfgMu.Unlock()
-		if err != nil {
-			writeJSON(w, 500, map[string]any{"error": err.Error()})
-			return
-		}
-		logAgent("key.generate", "agent", "ok", "密钥已轮换，旧密钥失效")
-		writeJSON(w, 200, map[string]any{"ok": true, "key": key, "message": "新密钥只显示这一次，请立即复制保存"})
-	})
-	mux.HandleFunc("/api/agent/key/revoke", func(w http.ResponseWriter, r *http.Request) {
-		if !requireAuth(w, r) || r.Method != "POST" {
-			return
-		}
-		cfgMu.Lock()
-		cfg.AgentAPIKey = ""
-		err := saveConfigLocked()
-		cfgMu.Unlock()
-		if err != nil {
-			writeJSON(w, 500, map[string]any{"error": err.Error()})
-			return
-		}
-		logAgent("key.revoke", "agent", "ok", "密钥已吊销，agent API 已停用")
-		writeJSON(w, 200, map[string]any{"ok": true, "message": "密钥已吊销，agent API 已停用"})
-	})
-	mux.HandleFunc("/api/agent/audit", func(w http.ResponseWriter, r *http.Request) {
-		if !requireAuth(w, r) {
-			return
-		}
-		writeJSON(w, 200, map[string]any{"ok": true, "entries": getAgentAudit()})
-	})
-
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAuth(w, r) {
 			return
@@ -461,7 +333,7 @@ func routes() http.Handler {
 			Port       int    `json:"port"`
 			PublicPort int    `json:"public_port"`
 			TLSMode    string `json:"tls_mode"`
-			DDNS    struct {
+			DDNS       struct {
 				Enabled     bool   `json:"enabled"`
 				Token       string `json:"token"`
 				TokenChange bool   `json:"token_change"`
@@ -471,17 +343,17 @@ func routes() http.Handler {
 				IntervalSec int    `json:"interval_sec"`
 			} `json:"ddns"`
 			PCs []struct {
-				ID              string `json:"id"`
-				Name            string `json:"name"`
-				IP              string `json:"ip"`
-				MAC             string `json:"mac"`
-				BroadcastIP     string `json:"broadcast_ip"`
-				SSHUser         string `json:"ssh_user"`
-				SSHPassword     string `json:"ssh_password"`
-				PasswordChange  bool   `json:"password_change"`
-				SSHKey          string `json:"ssh_key"`
-				KeyChange       bool   `json:"key_change"`
-				SSHPort         int    `json:"ssh_port"`
+				ID             string `json:"id"`
+				Name           string `json:"name"`
+				IP             string `json:"ip"`
+				MAC            string `json:"mac"`
+				BroadcastIP    string `json:"broadcast_ip"`
+				SSHUser        string `json:"ssh_user"`
+				SSHPassword    string `json:"ssh_password"`
+				PasswordChange bool   `json:"password_change"`
+				SSHKey         string `json:"ssh_key"`
+				KeyChange      bool   `json:"key_change"`
+				SSHPort        int    `json:"ssh_port"`
 			} `json:"pcs"`
 			OpenWrt struct {
 				Host           string `json:"host"`
@@ -659,9 +531,7 @@ func servePublic() error {
 }
 
 // ---- 外网操作页（5055）：无密码、无设置，与管理页彻底隔离 ----
-// 只挂：首页、图标/manifest、公开状态、PC 开机/关机（点大圆环切换，无重启按钮）+ OP 关机，
-// 外加 v1.3 Agent API（/api/v1/agent/*，Bearer 密钥认证，无密钥/错密钥一律 401/503）
-// 与 v1.4 MCP Server（/mcp，Streamable HTTP，同密钥）。
+// 只挂：首页、图标/manifest、公开状态、PC 开机/关机（点大圆环切换，无重启按钮）+ OP 关机。
 // 刻意不挂：/api/config、/api/login、/api/me、/api/status（完整版）、/api/ddns/*，
 // 也不返回 PC 的 IP/MAC、OpenWrt 的 IP、任何 Token/密码。其他路径一律 404。
 // 加固（不改变“无密码”体验）：POST 要求同源（Origin 与请求 Host 同域名时才放行，
@@ -729,11 +599,6 @@ func publicRoutes() http.Handler {
 	mux.HandleFunc("/api/public/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": appVersion})
 	})
-	// v1.4 MCP Server（Streamable HTTP，无状态），与 Agent API 共用 Bearer 密钥
-	mux.HandleFunc("/mcp", mcpHandler)
-	// v1.4.1 旧版 SSE 传输（兼容只认 SSE 的客户端）：GET /sse 建会话 + POST /messages 发请求
-	mux.HandleFunc("/sse", sseHandler)
-	mux.HandleFunc("/messages", messagesHandler)
 	// 公开状态：只给名字和开关机状态，不给 IP/MAC/主机地址
 	mux.HandleFunc("/api/public/status", func(w http.ResponseWriter, r *http.Request) {
 		statusMu.RLock()
@@ -795,108 +660,5 @@ func publicRoutes() http.Handler {
 		writeJSON(w, 200, map[string]any{"ok": true, "message": "OpenWrt 关机命令已发送"})
 	})
 
-	// ---- v1.3 Agent API：/api/v1/agent/*，挂 5055 公网入口，全部要求 Bearer 密钥 ----
-	// 与无密码公开页隔离：无密钥 / 错密钥一律 401/503，不泄露任何配置、IP/MAC、Token。
-	// 统一返回 {"ok":bool, "data"/"message", "error"}；写操作带 5 秒冷却并记审计日志。
-	mux.HandleFunc("/api/v1/agent/health", func(w http.ResponseWriter, r *http.Request) {
-		if !agentAuth(w, r) {
-			return
-		}
-		writeJSON(w, 200, map[string]any{"ok": true, "version": appVersion, "time": time.Now().Format(time.RFC3339)})
-	})
-	mux.HandleFunc("/api/v1/agent/status", func(w http.ResponseWriter, r *http.Request) {
-		if !agentAuth(w, r) {
-			return
-		}
-		statusMu.RLock()
-		pcs := pcStatuses
-		owOn := owOnline
-		statusMu.RUnlock()
-		if pcs == nil {
-			pcs = []pcStatus{}
-		}
-		out := make([]map[string]any, 0, len(pcs))
-		for _, p := range pcs {
-			out = append(out, map[string]any{"id": p.ID, "name": p.Name, "online": p.Online})
-		}
-		writeJSON(w, 200, map[string]any{
-			"ok": true, "version": appVersion, "domain": getConfig().DDNS.Domain,
-			"pcs": out, "openwrt": map[string]any{"online": owOn},
-		})
-	})
-	mux.HandleFunc("/api/v1/agent/audit", func(w http.ResponseWriter, r *http.Request) {
-		if !agentAuth(w, r) {
-			return
-		}
-		writeJSON(w, 200, map[string]any{"ok": true, "entries": getAgentAudit()})
-	})
-	mux.HandleFunc("/api/v1/agent/pc/", func(w http.ResponseWriter, r *http.Request) {
-		if !agentAuth(w, r) {
-			return
-		}
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/agent/pc/"), "/")
-		if len(parts) != 2 {
-			writeJSON(w, 404, map[string]any{"ok": false, "error": "not found"})
-			return
-		}
-		if !agentPostGuard(w, r, "agent:pc:"+parts[0]+":"+parts[1]) {
-			return
-		}
-		pc := findPC(getConfig(), parts[0])
-		if pc == nil {
-			writeJSON(w, 404, map[string]any{"ok": false, "error": "找不到该 PC"})
-			return
-		}
-		var err error
-		var msg string
-		switch parts[1] {
-		case "wake":
-			err = sendWOL(*pc)
-			msg = "魔术包已发送，等待 PC 启动（约 10-60 秒）"
-		case "shutdown":
-			err = windowsShutdown(*pc)
-			msg = "关机命令已发送"
-		case "restart":
-			err = windowsRestart(*pc)
-			msg = "重启命令已发送"
-		default:
-			writeJSON(w, 404, map[string]any{"ok": false, "error": "未知动作"})
-			return
-		}
-		if err != nil {
-			logAgent("pc."+parts[1], parts[0], "fail", err.Error())
-			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
-			return
-		}
-		logAgent("pc."+parts[1], parts[0], "ok", msg)
-		go func() { time.Sleep(3 * time.Second); refreshStatuses() }()
-		writeJSON(w, 200, map[string]any{"ok": true, "message": msg})
-	})
-	mux.HandleFunc("/api/v1/agent/openwrt/poweroff", func(w http.ResponseWriter, r *http.Request) {
-		if !agentAuth(w, r) {
-			return
-		}
-		if !agentPostGuard(w, r, "agent:openwrt:poweroff") {
-			return
-		}
-		if err := openWrtPoweroff(getConfig()); err != nil {
-			logAgent("openwrt.poweroff", "openwrt", "fail", err.Error())
-			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
-			return
-		}
-		logAgent("openwrt.poweroff", "openwrt", "ok", "OpenWrt 关机命令已发送")
-		writeJSON(w, 200, map[string]any{"ok": true, "message": "OpenWrt 关机命令已发送"})
-	})
-	mux.HandleFunc("/api/v1/agent/ddns/refresh", func(w http.ResponseWriter, r *http.Request) {
-		if !agentAuth(w, r) {
-			return
-		}
-		if !agentPostGuard(w, r, "agent:ddns:refresh") {
-			return
-		}
-		go runDDNSOnce()
-		logAgent("ddns.refresh", "ddns", "ok", "DDNS 刷新已触发")
-		writeJSON(w, 200, map[string]any{"ok": true, "message": "DDNS 刷新中，稍后查看结果"})
-	})
 	return mux
 }

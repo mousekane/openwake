@@ -45,14 +45,13 @@ type DDNSConfig struct {
 }
 
 type Config struct {
-	AdminHash   string        `json:"admin_hash"` // bcrypt，空 = 未设置，需先走 /setup
-	Port        int           `json:"port"`       // 管理页：仅内网访问，路由器只转发 PublicPort，不转发本端口
-	PublicPort  int           `json:"public_port"` // 外网操作页：无密码、无设置，仅状态+4 个动作，路由器只转发本端口
-	TLSMode     string        `json:"tls_mode"` // http | https（https 且无证书时自动生成自签名证书），两个端口共用
-	AgentAPIKey string        `json:"agent_api_key"` // v1.3：AI agent 调用密钥，空 = agent API 未启用；只在管理页生成/轮换/吊销
-	DDNS        DDNSConfig    `json:"ddns"`
-	PCs         []PCConfig    `json:"pcs"`
-	OpenWrt     SSHHostConfig `json:"openwrt"`
+	AdminHash  string        `json:"admin_hash"`  // bcrypt，空 = 未设置，需先走 /setup
+	Port       int           `json:"port"`        // 管理页：仅内网访问，路由器只转发 PublicPort，不转发本端口
+	PublicPort int           `json:"public_port"` // 外网操作页：无密码、无设置，仅状态+4 个动作，路由器只转发本端口
+	TLSMode    string        `json:"tls_mode"`    // http | https（https 且无证书时自动生成自签名证书），两个端口共用
+	DDNS       DDNSConfig    `json:"ddns"`
+	PCs        []PCConfig    `json:"pcs"`
+	OpenWrt    SSHHostConfig `json:"openwrt"`
 }
 
 var (
@@ -199,13 +198,6 @@ func newSessionToken() string {
 	return hex.EncodeToString(b)
 }
 
-// newAgentAPIKey 生成 AI agent 调用密钥：owk_ + 32 字节随机 hex，仅在生成当次回显一次。
-func newAgentAPIKey() string {
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	return "owk_" + hex.EncodeToString(b)
-}
-
 // maskedConfig 给前端的脱敏配置：Token/密码只给“已设置”标记，不回传原文。
 func maskedConfig(c *Config) map[string]any {
 	pcs := make([]map[string]any, 0, len(c.PCs))
@@ -219,7 +211,6 @@ func maskedConfig(c *Config) map[string]any {
 	}
 	return map[string]any{
 		"port": c.Port, "public_port": c.PublicPort, "tls_mode": c.TLSMode,
-		"agent_api_key_set": c.AgentAPIKey != "",
 		"ddns": map[string]any{
 			"enabled": c.DDNS.Enabled, "domain": c.DDNS.Domain,
 			"token_set": c.DDNS.Token != "", "enable_v4": c.DDNS.EnableV4,
