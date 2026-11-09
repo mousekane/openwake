@@ -43,8 +43,8 @@ OpenWrt Docker 程序：DDNS + Wake-on-LAN + SSH 开关机，全部收进一个 
 示例（把 `KEY` 换成你生成的密钥，域名换成你自己的）：
 
 ```bash
-curl -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/agent/status
-curl -X POST -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/agent/pc/pc1/wake
+curl -H "Authorization: Bearer KEY" http://<DDNS域名>:5055/api/v1/agent/status
+curl -X POST -H "Authorization: Bearer KEY" http://<DDNS域名>:5055/api/v1/agent/pc/pc1/wake
 ```
 
 安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。从云端调用时同样必须走 HTTPS（原因和配法见下节 MCP 的提醒与 Lucky 一节）；局域网内直连 HTTP 即可。
@@ -63,9 +63,9 @@ REST API 只有具备 HTTP 调用能力的 agent 能直接调；Claude Desktop�
 
 OpenWrt 上装了 Lucky 的话，不用在 OpenWake 里配证书，Lucky 反代 + 自动续期一次搞定（已实测可用）：
 
-1. **申请证书**：Lucky → SSL/TLS 证书 → 添加证书 → ACME → Let's Encrypt，域名填你的 DDNS 域名（如 `openwake.555554444.xyz`），DNS 验证选 Cloudflare，填 API Token（需要 Zone:DNS:Edit 权限），申请后 Lucky 会自动续期，不用再管。
+1. **申请证书**：Lucky → SSL/TLS 证书 → 添加证书 → ACME → Let's Encrypt，域名填你的 DDNS 域名（如 `wake.example.com`），DNS 验证选 Cloudflare，填 API Token（需要 Zone:DNS:Edit 权限），申请后 Lucky 会自动续期，不用再管。
 2. **反向代理**：Lucky → Web 服务 → 添加反向代理，监听端口填 `8443`，开启 TLS 并选刚申请的证书，后端地址填 `http://127.0.0.1:5055`。
-3. **端口转发**：在光猫/主路由上把 `8443` 转发到 OpenWrt 内网 IP（如 `192.168.1.3`）的 `8443`。
+3. **端口转发**：在光猫/主路由上把 `8443` 转发到 OpenWrt 内网 IP 的 `8443`。
 4. **验证**：`curl https://<DDNS域名>:8443/mcp` 应返回 401（无密钥是正常的，说明 TLS、反代、鉴权都通了）；带上密钥调一次应能列出 8 个工具。
 5. **改地址**：云端客户端的 MCP 地址改成 `https://<DDNS域名>:8443/mcp`。监听端口可以自选，改了端口就把地址里的端口跟着改。局域网内仍可继续用 `http://<内网IP>:5055/mcp`。
 
@@ -75,7 +75,7 @@ OpenWrt 上装了 Lucky 的话，不用在 OpenWake 里配证书，Lucky 反代 
 {
   "mcpServers": {
     "openwake": {
-      "url": "http://openwake.555554444.xyz:5055/mcp",
+      "url": "http://wake.example.com:5055/mcp",
       "headers": { "Authorization": "Bearer 你的密钥" }
     }
   }
@@ -85,7 +85,7 @@ OpenWrt 上装了 Lucky 的话，不用在 OpenWake 里配证书，Lucky 反代 
 只支持本地 stdio 的客户端（如旧版 Claude Desktop），用桥接工具转接，例如：
 
 ```bash
-npx -y mcp-remote http://openwake.555554444.xyz:5055/mcp --header "Authorization: Bearer 你的密钥"
+npx -y mcp-remote http://wake.example.com:5055/mcp --header "Authorization: Bearer 你的密钥"
 ```
 
 v1.4.1 兼容性补充：POST `/mcp` 在客户端只接受 SSE 时会回 SSE 流（`data: JSON`）；另提供旧版 SSE 传输——`GET /sse` 建会话（回 `endpoint` 事件给出去 `/messages?session_id=xxx`）+ `POST /messages` 发 JSON-RPC 请求，结果经 SSE 流回推。两条路同样走 Bearer 密钥认证。如果某个客户端连 `/mcp` 反复失败，可改试 SSE 传输。
