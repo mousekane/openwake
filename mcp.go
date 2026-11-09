@@ -6,12 +6,17 @@ package main
 // 实现只依赖标准库：initialize / ping / tools/list / tools/call 四个方法，
 // 其余方法回 -32601，通知回 202。协议版本协商：客户端给的版本在支持列表里就原样
 // 回，否则回 2025-03-26。
+// v1.4.1 兼容旧客户端：POST /mcp 在客户端只接受 SSE 时回 SSE 流（data: JSON）；
+// 另提供旧版 SSE 传输：GET /sse 建会话（回 endpoint 事件）+ POST /messages 发请求，
+// 结果经 SSE 流回推。两条路共用同一套工具、同一把密钥。
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -197,6 +202,61 @@ var mcpSupportedVersions = map[string]bool{
 	"2024-11-05": true, "2024-10-07": true,
 }
 
+// dispatchRPC：解析并执行一条 JSON-RPC 请求，返回响应体（通知返回 nil，不回包）。
+func dispatchRPC(body []byte) []byte {
+	marshal := func(resp jsonrpcResponse) []byte {
+		b, _ := json.Marshal(resp)
+		return b
+	}
+	var req jsonrpcRequest
+	if err := json.Unmarshal(body, &req); err != nil || req.Method == "" {
+		return marshal(jsonrpcResponse{JSONRPC: "2.0", Error: rpcError(-32700, "请求体解析失败")})
+	}
+	// 通知（无 id、无需回包）
+	if strings.HasPrefix(req.Method, "notifications/") || req.ID == nil {
+		return nil
+	}
+	resp := func(result any, rpcErr *jsonrpcError) []byte {
+		return marshal(jsonrpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result, Error: rpcErr})
+	}
+	switch req.Method {
+	case "initialize":
+		var p struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		ver := "2025-03-26"
+		if mcpSupportedVersions[p.ProtocolVersion] {
+			ver = p.ProtocolVersion
+		}
+		return resp(map[string]any{
+			"protocolVersion": ver,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "openwake", "version": appVersion},
+		}, nil)
+	case "ping":
+		return resp(map[string]any{}, nil)
+	case "tools/list":
+		return resp(map[string]any{"tools": mcpTools()}, nil)
+	case "tools/call":
+		var p struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.Name == "" {
+			return resp(nil, rpcError(-32602, "tools/call 参数无效"))
+		}
+		if p.Arguments == nil {
+			p.Arguments = map[string]any{}
+		}
+		result, rpcErr := mcpCallTool(p.Name, p.Arguments)
+		return resp(result, rpcErr)
+	default:
+		return resp(nil, rpcError(-32601, "不支持的方法："+req.Method))
+	}
+}
+
+// mcpHandler：Streamable HTTP。客户端只接受 SSE 时回 SSE 流，否则回 JSON。
 func mcpHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
@@ -211,50 +271,109 @@ func mcpHandler(w http.ResponseWriter, r *http.Request) {
 		writeRPC(w, nil, nil, rpcError(-32700, "请求体解析失败"))
 		return
 	}
-	var req jsonrpcRequest
-	if err := json.Unmarshal(body, &req); err != nil || req.Method == "" {
-		writeRPC(w, nil, nil, rpcError(-32700, "请求体解析失败"))
-		return
-	}
-	// 通知（无 id、无需回包）：按 Streamable HTTP 惯例回 202 空体。
-	if strings.HasPrefix(req.Method, "notifications/") || req.ID == nil {
+	resp := dispatchRPC(body)
+	if resp == nil {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	switch req.Method {
-	case "initialize":
-		var p struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		}
-		_ = json.Unmarshal(req.Params, &p)
-		ver := "2025-03-26"
-		if mcpSupportedVersions[p.ProtocolVersion] {
-			ver = p.ProtocolVersion
-		}
-		writeRPC(w, req.ID, map[string]any{
-			"protocolVersion": ver,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "openwake", "version": appVersion},
-		}, nil)
-	case "ping":
-		writeRPC(w, req.ID, map[string]any{}, nil)
-	case "tools/list":
-		writeRPC(w, req.ID, map[string]any{"tools": mcpTools()}, nil)
-	case "tools/call":
-		var p struct {
-			Name      string         `json:"name"`
-			Arguments map[string]any `json:"arguments"`
-		}
-		if err := json.Unmarshal(req.Params, &p); err != nil || p.Name == "" {
-			writeRPC(w, req.ID, nil, rpcError(-32602, "tools/call 参数无效"))
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "text/event-stream") && !strings.Contains(accept, "application/json") {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write([]byte("data: " + string(resp) + "\n\n"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(resp)
+}
+
+// ---- 旧版 SSE 传输（v1.4.1）：GET /sse 建会话 + POST /messages 发请求 ----
+
+type sseSession struct {
+	ch chan []byte
+}
+
+var (
+	sseMu       sync.Mutex
+	sseSessions = map[string]*sseSession{}
+)
+
+func sseHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.Header().Set("Allow", "GET")
+		writeJSON(w, 405, map[string]any{"ok": false, "error": "SSE 建会话只接受 GET"})
+		return
+	}
+	if !agentAuth(w, r) {
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, 500, map[string]any{"ok": false, "error": "服务器不支持 SSE 流"})
+		return
+	}
+	id := newSessionToken()
+	sess := &sseSession{ch: make(chan []byte, 16)}
+	sseMu.Lock()
+	sseSessions[id] = sess
+	sseMu.Unlock()
+	defer func() {
+		sseMu.Lock()
+		delete(sseSessions, id)
+		sseMu.Unlock()
+	}()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	_, _ = fmt.Fprintf(w, "event: endpoint\ndata: /messages?session_id=%s\n\n", id)
+	flusher.Flush()
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case msg, ok := <-sess.ch:
+			if !ok {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		case <-ticker.C:
+			_, _ = w.Write([]byte(": keep-alive\n\n"))
+			flusher.Flush()
+		case <-r.Context().Done():
 			return
 		}
-		if p.Arguments == nil {
-			p.Arguments = map[string]any{}
-		}
-		result, rpcErr := mcpCallTool(p.Name, p.Arguments)
-		writeRPC(w, req.ID, result, rpcErr)
-	default:
-		writeRPC(w, req.ID, nil, rpcError(-32601, "不支持的方法："+req.Method))
 	}
+}
+
+func messagesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		w.Header().Set("Allow", "POST")
+		writeJSON(w, 405, map[string]any{"ok": false, "error": "SSE 消息只接受 POST"})
+		return
+	}
+	if !agentAuth(w, r) {
+		return
+	}
+	sid := r.URL.Query().Get("session_id")
+	sseMu.Lock()
+	sess, ok := sseSessions[sid]
+	sseMu.Unlock()
+	if !ok {
+		writeJSON(w, 404, map[string]any{"ok": false, "error": "会话不存在或已断开，请重新 GET /sse 建会话"})
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil || len(body) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	resp := dispatchRPC(body)
+	if resp != nil {
+		select {
+		case sess.ch <- resp:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	w.WriteHeader(http.StatusAccepted)
 }

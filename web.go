@@ -45,7 +45,7 @@ var appleTouchIcon []byte
 //go:embed web/manifest.webmanifest
 var manifestJSON []byte
 
-const appVersion = "1.4.0"
+const appVersion = "1.4.1"
 
 func hashPassword(pw string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
@@ -731,6 +731,9 @@ func publicRoutes() http.Handler {
 	})
 	// v1.4 MCP Server（Streamable HTTP，无状态），与 Agent API 共用 Bearer 密钥
 	mux.HandleFunc("/mcp", mcpHandler)
+	// v1.4.1 旧版 SSE 传输（兼容只认 SSE 的客户端）：GET /sse 建会话 + POST /messages 发请求
+	mux.HandleFunc("/sse", sseHandler)
+	mux.HandleFunc("/messages", messagesHandler)
 	// 公开状态：只给名字和开关机状态，不给 IP/MAC/主机地址
 	mux.HandleFunc("/api/public/status", func(w http.ResponseWriter, r *http.Request) {
 		statusMu.RLock()

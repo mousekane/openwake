@@ -76,6 +76,8 @@ REST API 只有具备 HTTP 调用能力的 agent 能直接调；Claude Desktop�
 npx -y mcp-remote http://openwake.555554444.xyz:5055/mcp --header "Authorization: Bearer 你的密钥"
 ```
 
+v1.4.1 兼容性补充：POST `/mcp` 在客户端只接受 SSE 时会回 SSE 流（`data: JSON`）；另提供旧版 SSE 传输——`GET /sse` 建会话（回 `endpoint` 事件给出去 `/messages?session_id=xxx`）+ `POST /messages` 发 JSON-RPC 请求，结果经 SSE 流回推。两条路同样走 Bearer 密钥认证。如果某个客户端连 `/mcp` 反复失败，可改试 SSE 传输。
+
 两种接入方式的能力、认证、审计完全一致：REST 给能发 HTTP 的 agent，MCP 给只认 MCP 的 agent。
 
 ## 一键部署（OpenWrt / Linux Docker）
