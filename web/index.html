@@ -42,7 +42,7 @@ a{color:#60a5fa}
     <div class="row" style="margin-top:10px"><button onclick="agentGen()">生成新密钥</button><button class="ghost" onclick="agentRevoke()">吊销密钥</button><button class="ghost" onclick="loadAgentAudit()">刷新操作记录</button></div>
     <div id="agentKeyBox" style="margin-top:10px"></div>
     <div id="agentAuditBox" class="muted" style="margin-top:10px"></div>
-    <p class="muted">接口挂在 5055 公网入口，路径 /api/v1/agent/*，调用必须带 Authorization: Bearer 密钥。密钥等同于整机开关机权限，泄露立即点“生成新密钥”轮换（旧密钥立刻失效）。每次调用都记审计日志。接口文档见 README v1.3 一节。</p>
+    <p class="muted">接口挂在 5055 公网入口，路径 /api/v1/agent/*，调用必须带 Authorization: Bearer 密钥。MCP Server 也在同一入口：/mcp（Streamable HTTP），工具与 REST 接口一一对应，同一把密钥。密钥等同于整机开关机权限，泄露立即点“生成新密钥”轮换（旧密钥立刻失效）。每次调用都记审计日志。接口文档见 README v1.3 / v1.4 两节。</p>
   </div>
 
   <div class="card"><h2>配置 <button class="ghost" onclick="toggleCfg()">展开 / 收起</button></h2>
