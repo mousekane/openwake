@@ -47,7 +47,7 @@ curl -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/ag
 curl -X POST -H "Authorization: Bearer KEY" http://openwake.555554444.xyz:5055/api/v1/agent/pc/pc1/wake
 ```
 
-安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。从云端调用时同样必须走 HTTPS（原因见下节 MCP 的提醒）；局域网内直连 HTTP 即可。
+安全提醒：agent 接口和 5055 操作页共用一个公网入口，安全全靠 Bearer 密钥守。**不要把密钥写进公开仓库、聊天记录或交给不可信的 agent**；密钥只给受信任的 agent。5155 管理页依然不转发，只走内网。从云端调用时同样必须走 HTTPS（原因和配法见下节 MCP 的提醒与 Lucky 一节）；局域网内直连 HTTP 即可。
 
 ## v1.4 MCP Server（供只认 MCP 的 agent）
 
@@ -57,7 +57,17 @@ REST API 只有具备 HTTP 调用能力的 agent 能直接调；Claude Desktop�
 - 认证：请求头 `Authorization: Bearer <密钥>`，与 v1.3 同一把密钥；未生成密钥时返回 503，密钥错误返回 401
 - 工具（8 个，与 REST 接口一一对应）：`openwake_health`、`openwake_status`、`openwake_audit`、`openwake_pc_wake`、`openwake_pc_shutdown`、`openwake_pc_restart`、`openwake_openwrt_poweroff`、`openwake_ddns_refresh`；写操作同样 5 秒冷却并记审计日志
 
-> **⚠️ 用 MCP 前先看：从云端调用必须配 HTTPS，局域网内不用。** 从云端调 `/mcp`（如 Muse 自定义连接器）时，地址必须是 `https://`：实测某些客户端的凭证中转机制只在 HTTPS 请求上才把替身换成真密钥，明文 HTTP 到达服务器的仍是替身，服务器回 401——即使密钥本身完全正确；而且密钥走明文 HTTP 会在公网裸奔。做法：用 Lucky 反向代理 + Let's Encrypt 证书把 5055 反代成 HTTPS，或直接给 OpenWake 配正式证书开 `tls_mode=https`（证书放 `/data/cert.pem` + `/data/key.pem` 并重启）。**局域网内直连不需要 HTTPS**，`http://<内网IP>:5055/mcp` 就行：客户端直接发真密钥，服务器正常认（实测豆包走内网地址就是这么通的）。
+> **⚠️ 用 MCP 前先看：从云端调用必须配 HTTPS，局域网内不用。** 从云端调 `/mcp`（如 Muse 自定义连接器）时，地址必须是 `https://`：实测某些客户端的凭证中转机制只在 HTTPS 请求上才把替身换成真密钥，明文 HTTP 到达服务器的仍是替身，服务器回 401——即使密钥本身完全正确；而且密钥走明文 HTTP 会在公网裸奔。配法见下面“Lucky 配 HTTPS”一节（推荐），或直接给 OpenWake 配正式证书开 `tls_mode=https`（证书放 `/data/cert.pem` + `/data/key.pem` 并重启）。**局域网内直连不需要 HTTPS**，`http://<内网IP>:5055/mcp` 就行：客户端直接发真密钥，服务器正常认（实测豆包走内网地址就是这么通的）。
+
+### 用 Lucky 配 HTTPS（推荐）
+
+OpenWrt 上装了 Lucky 的话，不用在 OpenWake 里配证书，Lucky 反代 + 自动续期一次搞定（已实测可用）：
+
+1. **申请证书**：Lucky → SSL/TLS 证书 → 添加证书 → ACME → Let's Encrypt，域名填你的 DDNS 域名（如 `openwake.555554444.xyz`），DNS 验证选 Cloudflare，填 API Token（需要 Zone:DNS:Edit 权限），申请后 Lucky 会自动续期，不用再管。
+2. **反向代理**：Lucky → Web 服务 → 添加反向代理，监听端口填 `8443`，开启 TLS 并选刚申请的证书，后端地址填 `http://127.0.0.1:5055`。
+3. **端口转发**：在光猫/主路由上把 `8443` 转发到 OpenWrt 内网 IP（如 `192.168.1.3`）的 `8443`。
+4. **验证**：`curl https://<DDNS域名>:8443/mcp` 应返回 401（无密钥是正常的，说明 TLS、反代、鉴权都通了）；带上密钥调一次应能列出 8 个工具。
+5. **改地址**：云端客户端的 MCP 地址改成 `https://<DDNS域名>:8443/mcp`。监听端口可以自选，改了端口就把地址里的端口跟着改。局域网内仍可继续用 `http://<内网IP>:5055/mcp`。
 
 支持远程 MCP 的客户端（如 Cherry Studio），直接填地址 + 请求头就能接管：
 
