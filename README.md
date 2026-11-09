@@ -50,6 +50,12 @@ curl http://<DDNS域名>:5055/api/public/status
 - 同一目标同一动作 5 秒内只放行一次（防连点）；POST 有同源检查：带 Origin 但域名对不上的跨站请求会被拒绝，不带 Origin 的服务端调用直接放行。
 - 不记审计日志。谁点了、什么时候点的，服务器不再记录。
 
+### OpenWake-豆包开关机技能-纯文本提示词（修改域名后直接粘贴给豆包）
+
+```
+请用 skill-creator-for-work 帮我创建一个名为 pc-power-control 的技能，通过 OpenWake 的 HTTP API 远程查询电脑状态、开机（网络唤醒）和关机。我的环境：服务入口是 http://【这里换成你的DDNS域名】:5055，端口固定 5055（Docker 部署的 OpenWake 默认端口，不要改），受控电脑 ID 固定 pc1。三个接口是：状态查询 GET /api/public/status，开机 POST /api/public/pc/pc1/wake，关机 POST /api/public/pc/pc1/shutdown，健康检查 GET /api/public/health，返回都是 JSON，status 形如 {"openwrt":{"online":true},"pcs":[{"id":"pc1","name":"Win PC","online":true}]}。请把口令映射写进技能描述，保证我用自然语言就能触发：说开机、打开电脑、电脑开机、帮我开机、帮我打开电脑就执行 wake；说关机、关闭电脑、电脑关机、帮我关机、帮我关闭电脑就执行 shutdown；说状态、查看状态、状态查看、电脑状态、查询电脑状态就执行 status；同时适用于远程唤醒、远程关机、判断电脑是否在线、开机或关机后的状态确认。以下是必须遵守的技术要求，都是踩过坑总结的，请务必落地：一、只走云端公网入口，禁止拿局域网 IP（如 192.168.x.x）做兜底，能走局域网说明人在家就不需要远程开关机，局域网入口要做硬拦截，不给显式放行参数就拒绝并报错退出。二、绝不写死 IP，也不缓存解析结果，家庭宽带是动态 IP 会变，唯一稳定的是 DDNS 域名，每次请求包括动作后轮询的每一轮都要重新解析。三、解析要绕过过期的 DNS 缓存，优先直接 UDP 查询公共 DNS，顺序 223.5.5.5、119.29.29.29、114.114.114.114、8.8.8.8，全都不通再回落到系统解析。四、多 IP 容错，把解析到的全部 A 和 AAAA 记录去重，IPv4 优先 IPv6 兜底，逐个 IP 尝试，请求时带上原域名的 Host 头。五、重试要分级，只有连接被拒（连接都没建立）才换下一个 IP 重发，超时或连接被重置视为可能已送达，关机这类不可逆操作绝不能重复发送。六、不经环境代理，用 http.client 直连解析出的 IP，不要依赖 urllib 加环境代理变量，沙箱代理会拦自有主机。七、开机和关机后要自动确认，动作只发一次请求，然后用 status 轮询确认，开机等到 online 为 true，关机等到 online 为 false 或 status 不可达，开机到上线通常几十秒，期间 online 为 false 属正常不要重发。八、状态判断口径只看 pcs 数组里 id 等于 pc1 的 online 字段，openwrt.online 只表示路由器是否在线，为 false 时先查网络，别当成电脑状态。九、连通性探测只用 GET status 和 GET /api/public/health，不要用 GET 去探 wake 和 shutdown 路径，有的实现不校验方法，GET 会真的触发开关机。交付要求：给我 SKILL.md 和 scripts/pc_power.py 两个文件，放在 .doubao/agent_mode/workspace/.user_skills/pc-power-control/ 目录下；脚本用 Python 3 标准库、不引入第三方依赖，子命令包含 status、wake、shutdown、init；域名和端口要支持配置，命令行参数 --host 和 --port、环境变量 OPENWAKE_HOST 和 OPENWAKE_PORT、技能目录下的 config.json，优先级是命令行大于环境变量大于 config.json 大于内置默认值，init --host 域名 用于一次性写入本机配置；支持 --wait 指定动作后轮询确认秒数，支持 --dry-run 只打印解析结果和将要发送的请求而不真正发送；输出用 KEY=VALUE 形式便于排查，至少包含 RESOLVE 显示域名解析到的 IP 列表和解析来源、每个 IP 的 attempt 结果、HTTP、RESULT、VERIFY；失败时要明确区分 DNS 解析失败（域名写错或 DDNS 未生效）和全部 IP 连接被拒（端口转发或服务有问题），并在 SKILL.md 里写清排查顺序。完成后用 status 实测一次确认能拿到状态 JSON，不要为了测试去真的关机或开机。
+```
+
 ## 一键部署（OpenWrt / Linux Docker）
 
 ```sh
